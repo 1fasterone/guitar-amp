@@ -176,6 +176,79 @@ MainComponent::MainComponent()
     setupKnob(reverbWidthKnob, reverbWidthLabel, reverbWidthValLabel, "WIDTH", 1.00, kRevAccent);
     makeSectionLabel(reverbSectionLabel, ">>  REVERB", kLabelDim);
 
+    // ---- Cab Sim ------------------------------------------------------------
+    makeSectionLabel(cabSectionLabel, ">>  CAB SIM", kLabelDim);
+
+    cabOnButton.setClickingTogglesState(true);
+    cabOnButton.setColour(juce::TextButton::buttonColourId,   juce::Colour(0xff909090));
+    cabOnButton.setColour(juce::TextButton::textColourOffId,  kLabelText);
+    cabOnButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff404040));
+    cabOnButton.setColour(juce::TextButton::textColourOnId,   juce::Colours::white);
+    cabOnButton.setMouseCursor(juce::MouseCursor::PointingHandCursor);
+    cabOnButton.onClick = [this]
+    {
+        cabActive = cabOnButton.getToggleState();
+        cabOnButton.setButtonText(cabActive.load() ? "CAB: ON" : "CAB: OFF");
+    };
+    addAndMakeVisible(cabOnButton);
+
+    cabLoadButton.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xff909090));
+    cabLoadButton.setColour(juce::TextButton::textColourOffId, kLabelText);
+    cabLoadButton.setMouseCursor(juce::MouseCursor::PointingHandCursor);
+    cabLoadButton.onClick = [this]
+    {
+        cabFileChooser = std::make_unique<juce::FileChooser>(
+            "Load Cabinet IR",
+            juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),
+            "*.wav;*.aiff");
+        cabFileChooser->launchAsync(
+            juce::FileBrowserComponent::openMode |
+            juce::FileBrowserComponent::canSelectFiles,
+            [this](const juce::FileChooser& fc)
+            {
+                auto result = fc.getResult();
+                if (!result.existsAsFile()) return;
+                cabSim.loadIR(result);
+                juce::MessageManager::callAsync([this, name = result.getFileName()]
+                {
+                    cabFileLabel.setText(name, juce::dontSendNotification);
+                    if (!cabOnButton.getToggleState())
+                    {
+                        cabOnButton.setToggleState(true, juce::dontSendNotification);
+                        cabActive = true;
+                        cabOnButton.setButtonText("CAB: ON");
+                    }
+                });
+            });
+    };
+    addAndMakeVisible(cabLoadButton);
+
+    cabBlendKnob.setLookAndFeel(&gMetalKnobLAF);
+    cabBlendKnob.setSliderStyle(juce::Slider::RotaryVerticalDrag);
+    cabBlendKnob.setRange(0.0, 1.0);
+    cabBlendKnob.setValue(1.0, juce::dontSendNotification);
+    cabBlendKnob.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    cabBlendKnob.onValueChange = [this] { pCabBlend = (float)cabBlendKnob.getValue(); };
+    addAndMakeVisible(cabBlendKnob);
+
+    cabBlendLabel.setText("BLEND", juce::dontSendNotification);
+    cabBlendLabel.setFont(monoFont(12.0f, juce::Font::bold));
+    cabBlendLabel.setColour(juce::Label::textColourId, kLabelText);
+    cabBlendLabel.setJustificationType(juce::Justification::centred);
+    addAndMakeVisible(cabBlendLabel);
+
+    cabBlendValLabel.setText("100%", juce::dontSendNotification);
+    cabBlendValLabel.setFont(monoFont(11.0f));
+    cabBlendValLabel.setColour(juce::Label::textColourId, kValueText);
+    cabBlendValLabel.setJustificationType(juce::Justification::centred);
+    addAndMakeVisible(cabBlendValLabel);
+
+    cabFileLabel.setText("No IR loaded", juce::dontSendNotification);
+    cabFileLabel.setFont(monoFont(10.0f));
+    cabFileLabel.setColour(juce::Label::textColourId, kValueText);
+    cabFileLabel.setJustificationType(juce::Justification::centredLeft);
+    addAndMakeVisible(cabFileLabel);
+
     // ---- Tuner --------------------------------------------------------------
     makeSectionLabel(tunerSectionLabel, ">>  CHROMATIC TUNER", kTunerAccentDim);
 
@@ -510,6 +583,11 @@ void MainComponent::timerCallback()
         tunerFreqLabel.setText("",  juce::dontSendNotification);
     }
 
+    // ---- Cab sim blend readout ----------------------------------------------
+    cabBlendValLabel.setText(
+        juce::String((int)(cabBlendKnob.getValue() * 100.0)) + "%",
+        juce::dontSendNotification);
+
     // ---- Backing track button state -----------------------------------------
     btPlayButton.setButtonText(transportSource.isPlaying() ? "STOP" : "PLAY");
     btVolumeValLabel.setText(
@@ -521,6 +599,7 @@ void MainComponent::timerCallback()
 void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate)
 {
     pitchDetector.setSampleRate(sampleRate);
+    cabSim.prepare(sampleRate, samplesPerBlockExpected);
     transportSource.prepareToPlay(samplesPerBlockExpected, sampleRate);
     backingBuffer.setSize(2, samplesPerBlockExpected + 512, false, true, false);
 
@@ -615,32 +694,41 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& info)
     const int   btChanCnt  = backingBuffer.getNumChannels();
     const int   btSamples  = backingBuffer.getNumSamples();
 
+    // ---- Loop 1: mono per-sample chain (gate → … → tape delay) → outL ------
     for (int i = 0; i < info.numSamples; ++i)
     {
-        const float rawIn = outL[i];          // capture before overwrite for tuner
+        const float rawIn = outL[i];
         if (tunerOn)
             pitchDetector.write(rawIn);
 
         double s = (double)rawIn;
-
-        s = noiseGate.process((float)s);        // gate before distortion
+        s = noiseGate.process((float)s);
         s = powerMetalDist.process(s);
         s = gainStage.process((float)s);
         s = toneStack.process(s);
         s = presenceFilter.process(s);
         s = phaser.process((float)s);
         s = tapeDelay.process((float)s);
+        outL[i] = (float)s;
+    }
 
+    // ---- Cab sim block (mono convolution, in-place on outL) -----------------
+    if (cabActive.load(std::memory_order_relaxed))
+        cabSim.processBlock(outL, info.numSamples,
+                            pCabBlend.load(std::memory_order_relaxed));
+
+    // ---- Loop 2: reverb + master + backing track mix → final stereo ---------
+    for (int i = 0; i < info.numSamples; ++i)
+    {
         float reverbL, reverbR;
-        reverb.process((float)s, reverbL, reverbR);
+        reverb.process(outL[i], reverbL, reverbR);
 
         float finalL = masterVolume.process(reverbL);
         float finalR = masterVolume.process(reverbR);
 
-        // Mix backing track into output
         if (btPlaying && i < btSamples)
         {
-            finalL += backingBuffer.getSample(0,                   i) * btVol;
+            finalL += backingBuffer.getSample(0,                     i) * btVol;
             finalR += backingBuffer.getSample(btChanCnt > 1 ? 1 : 0, i) * btVol;
         }
 
@@ -671,8 +759,9 @@ void MainComponent::paint(juce::Graphics& g)
     const int row4Y = titleBarH + (rowH + m) * 3;
     const int row5Y = titleBarH + (rowH + m) * 4;
 
-    const int preampEndX = (int)(getWidth() * 0.43f);
-    const int powerEndX  = (int)(getWidth() * 0.60f);
+    const int preampEndX = (int)(getWidth() * 0.39f);
+    const int powerEndX  = (int)(getWidth() * 0.53f);
+    const int cabEndX    = (int)(getWidth() * 0.73f);
 
     // ---- Title bar ----------------------------------------------------------
     {
@@ -740,10 +829,11 @@ void MainComponent::paint(juce::Graphics& g)
     drawMetalPanel(m, row3Y, getWidth() - m * 2, rowH);
     drawMetalPanel(m, row4Y, getWidth() - m * 2, rowH);
 
-    // Row 5 — three sub-panels
-    drawMetalPanel(m,               row5Y, preampEndX - m * 2,            rowH);
-    drawMetalPanel(preampEndX + m,  row5Y, powerEndX - preampEndX - m,    rowH);
-    drawMetalPanel(powerEndX + m,   row5Y, getWidth() - powerEndX - m * 2, rowH);
+    // Row 5 — four sub-panels: preamp | power amp | cab sim | reverb
+    drawMetalPanel(m,              row5Y, preampEndX - m * 2,          rowH);
+    drawMetalPanel(preampEndX + m, row5Y, powerEndX - preampEndX - m,  rowH);
+    drawMetalPanel(powerEndX + m,  row5Y, cabEndX - powerEndX - m,     rowH);
+    drawMetalPanel(cabEndX + m,    row5Y, getWidth() - cabEndX - m * 2, rowH);
 
     // Row 6 — tuner + backing track
     drawMetalPanel(m,              row6Y, tunerEndX - m * 2,              rowH);
@@ -766,8 +856,9 @@ void MainComponent::resized()
     const int row4Y = titleBarH + (rowH + m) * 3 + pad;
     const int row5Y = titleBarH + (rowH + m) * 4 + pad;
 
-    const int preampEndX = (int)(getWidth() * 0.43f);
-    const int powerEndX  = (int)(getWidth() * 0.60f);
+    const int preampEndX = (int)(getWidth() * 0.39f);
+    const int powerEndX  = (int)(getWidth() * 0.53f);
+    const int cabEndX    = (int)(getWidth() * 0.73f);
     const int tunerEndX  = (int)(getWidth() * 0.38f);
 
     audioSettingsButton.setBounds(getWidth() - 190 - m, 3, 190, titleBarH - 6);
@@ -822,8 +913,9 @@ void MainComponent::resized()
 
     const int botH = rowH - pad * 2;
 
+    // Preamp
     {
-        auto area = juce::Rectangle<int>(m*2, row5Y, preampEndX-m*3, botH);
+        auto area = juce::Rectangle<int>(m*2, row5Y, preampEndX - m*3, botH);
         preampSectionLabel.setBounds(area.removeFromTop(secH));
         const int kw = area.getWidth() / 4;
         placeKnob(area, kw, gainKnob,   gainLabel,   gainValLabel);
@@ -831,15 +923,40 @@ void MainComponent::resized()
         placeKnob(area, kw, midKnob,    midLabel,    midValLabel);
         placeKnob(area, kw, trebleKnob, trebleLabel, trebleValLabel);
     }
+    // Power Amp
     {
-        auto area = juce::Rectangle<int>(preampEndX+m, row5Y, powerEndX-preampEndX-m, botH);
+        auto area = juce::Rectangle<int>(preampEndX + m, row5Y,
+                                         powerEndX - preampEndX - m, botH);
         powerAmpSectionLabel.setBounds(area.removeFromTop(secH));
         const int kw = area.getWidth() / 2;
         placeKnob(area, kw, presenceKnob, presenceLabel, presenceValLabel);
         placeKnob(area, kw, masterKnob,   masterLabel,   masterValLabel);
     }
+    // Cab Sim
     {
-        auto area = juce::Rectangle<int>(powerEndX+m, row5Y, getWidth()-powerEndX-m*2, botH);
+        auto area = juce::Rectangle<int>(powerEndX + m, row5Y,
+                                         cabEndX - powerEndX - m, botH);
+        cabSectionLabel.setBounds(area.removeFromTop(secH));
+
+        // ON and LOAD buttons stacked on the left
+        auto btnCol = area.removeFromLeft(area.getWidth() - 88);
+        cabOnButton.setBounds  (btnCol.removeFromTop(28));
+        btnCol.removeFromTop(4);
+        cabLoadButton.setBounds(btnCol.removeFromTop(28));
+
+        // File label at bottom
+        cabFileLabel.setBounds(area.removeFromBottom(valH));
+
+        // Blend knob fills remaining right column
+        area.removeFromTop(2);
+        cabBlendValLabel.setBounds(area.removeFromBottom(valH));
+        cabBlendLabel.setBounds   (area.removeFromBottom(labelH));
+        cabBlendKnob.setBounds    (area.reduced(pad, 2));
+    }
+    // Reverb
+    {
+        auto area = juce::Rectangle<int>(cabEndX + m, row5Y,
+                                         getWidth() - cabEndX - m*2, botH);
         reverbSectionLabel.setBounds(area.removeFromTop(secH));
         const int kw = area.getWidth() / 4;
         placeKnob(area, kw, reverbMixKnob,   reverbMixLabel,   reverbMixValLabel);

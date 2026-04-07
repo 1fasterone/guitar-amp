@@ -10,11 +10,12 @@
 #include "DSP/Reverb.h"
 #include "DSP/MasterVolume.h"
 #include "DSP/PitchDetector.h"
+#include "DSP/CabSim.h"
 
 // ============================================================================
 // Signal chain:
 //   Input → [NoiseGate] → [Distortion] → [Gain] → [ToneStack] → [Presence]
-//         → [Phaser] → [TapeDelay] → [Reverb] → [Master] → Stereo Out
+//         → [Phaser] → [TapeDelay] → [CabSim] → [Reverb] → [Master] → Stereo Out
 //   + Backing track mixed into stereo output
 // ============================================================================
 class MainComponent : public juce::AudioAppComponent,
@@ -78,6 +79,14 @@ private:
     juce::Label  presenceValLabel, masterValLabel;
     juce::Label  powerAmpSectionLabel;
 
+    // UI — cab sim
+    juce::TextButton cabOnButton   { "CAB: OFF" };
+    juce::TextButton cabLoadButton { "LOAD IR" };
+    juce::Slider     cabBlendKnob;
+    juce::Label      cabBlendLabel, cabBlendValLabel;
+    juce::Label      cabFileLabel;
+    juce::Label      cabSectionLabel;
+
     // UI — reverb
     juce::Slider reverbMixKnob, reverbSizeKnob, reverbDampKnob, reverbWidthKnob;
     juce::Label  reverbMixLabel,     reverbSizeLabel,     reverbDampLabel,     reverbWidthLabel;
@@ -115,6 +124,10 @@ private:
     FreeverbEngine       reverb;
     MasterVolume         masterVolume;
     PitchDetector        pitchDetector;
+    CabSim               cabSim;
+
+    // Cab sim file chooser (separate from backing-track chooser)
+    std::unique_ptr<juce::FileChooser>             cabFileChooser;
 
     // Backing track audio engine
     juce::AudioFormatManager                       formatManager;
@@ -156,6 +169,10 @@ private:
     std::atomic<float> pReverbSize    {0.50f};
     std::atomic<float> pReverbDamp    {0.50f};
     std::atomic<float> pReverbWidth   {1.00f};
+
+    // Atomic params — cab sim
+    std::atomic<bool>  cabActive      {false};
+    std::atomic<float> pCabBlend      {1.00f};   // 1.0 = full IR, 0.0 = dry
 
     // Atomic params — tuner + backing track
     std::atomic<bool>  tunerActive    {false};
