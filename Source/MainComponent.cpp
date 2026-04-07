@@ -1,93 +1,114 @@
 #include "MainComponent.h"
 
 //==============================================================================
-static const juce::Colour kBackground    { 0xff1a1a1c };
-static const juce::Colour kSeparator     { 0xff3a3a3e };
-static const juce::Colour kValueText     { 0xffaaaaaa };
+// ---- Unified hardware metal palette ----------------------------------------
+static const juce::Colour kBackground    { 0xff1e1e20 };   // body between panels
+static const juce::Colour kSeparator     { 0xff505050 };
+// Panel metal shades
+static const juce::Colour kMetalTop      { 0xffbebebe };   // gradient highlight
+static const juce::Colour kMetalBot      { 0xff939393 };   // gradient shadow
+static const juce::Colour kMetalRim      { 0xff484848 };   // border
+// Text on silver
+static const juce::Colour kLabelText     { 0xff1a1a1a };   // knob name labels
+static const juce::Colour kLabelDim      { 0xff3c3c3c };   // section ">> FOO" labels
+static const juce::Colour kValueText     { 0xff404040 };   // value readout labels
+// Divider line between sub-panels in row 5
+static const juce::Colour kDivider       { 0xff585858 };
 
-// Noise Gate — dark green
-static const juce::Colour kGatePanel     { 0xff0e1a0e };
-static const juce::Colour kGateAccent    { 0xff44cc44 };
-static const juce::Colour kGateAccentDim { 0xff2a882a };
-static const juce::Colour kGateKnob      { 0xff1a2a1a };
+// Accent colours that remain visible on a silver background
+// (used only for tuner note display and BT controls)
+static const juce::Colour kTunerAccent   { 0xff006688 };   // dark teal
+static const juce::Colour kTunerAccentDim{ 0xff004455 };
+static const juce::Colour kBTAccent      { 0xff6600aa };   // dark purple
+static const juce::Colour kBTAccentDim   { 0xff440077 };
 
-// Distortion — crimson / fire
-static const juce::Colour kDistPanel     { 0xff261414 };
-static const juce::Colour kDistAccent    { 0xffdd4400 };
-static const juce::Colour kDistAccentDim { 0xff993300 };
-static const juce::Colour kDistKnob      { 0xff3a2020 };
-
-// Phaser — purple
-static const juce::Colour kPhasePanel    { 0xff1a1428 };
-static const juce::Colour kPhaseAccent   { 0xffaa66ff };
-static const juce::Colour kPhaseAccentDim{ 0xff7744bb };
-static const juce::Colour kPhaseKnob     { 0xff2a2038 };
-
-// Tape Delay — olive
-static const juce::Colour kDelayPanel    { 0xff1e1c10 };
-static const juce::Colour kDelayAccent   { 0xffaa9933 };
-static const juce::Colour kDelayAccentDim{ 0xff776622 };
-static const juce::Colour kDelayKnob     { 0xff302c18 };
-
-// Amp — amber
-static const juce::Colour kAmpPanel      { 0xff222226 };
-static const juce::Colour kPowerPanel    { 0xff1e1e22 };
-static const juce::Colour kAmpAccent     { 0xffcc8800 };
-static const juce::Colour kAmpAccentDim  { 0xff886600 };
-static const juce::Colour kAmpKnob       { 0xff36363a };
-
-// Reverb — steel blue
-static const juce::Colour kRevPanel      { 0xff162030 };
-static const juce::Colour kRevAccent     { 0xff5599dd };
-static const juce::Colour kRevAccentDim  { 0xff336699 };
-static const juce::Colour kRevKnob       { 0xff223040 };
-
-// Tuner — teal / cyan
-static const juce::Colour kTunerPanel    { 0xff0d1c1c };
-static const juce::Colour kTunerAccent   { 0xff33bbcc };
-static const juce::Colour kTunerAccentDim{ 0xff226677 };
-static const juce::Colour kTunerKnob     { 0xff1a3030 };
-
-// Backing Track — purple / magenta
-static const juce::Colour kBTPanel       { 0xff1a0e22 };
-static const juce::Colour kBTAccent      { 0xffcc55ff };
-static const juce::Colour kBTAccentDim   { 0xff883399 };
-static const juce::Colour kBTKnob        { 0xff2a1838 };
+// Legacy aliases kept so button-colour calls still compile
+static const juce::Colour kAmpAccent     { 0xff1a1a1a };   // title-bar text (white below)
+static const juce::Colour kGateAccent    = kLabelText;
+static const juce::Colour kDistAccent    = kLabelText;
+static const juce::Colour kPhaseAccent   = kLabelText;
+static const juce::Colour kDelayAccent   = kLabelText;
+static const juce::Colour kRevAccent     = kLabelText;
 
 //==============================================================================
-struct SectionLAF : public juce::LookAndFeel_V4
+// Chrome / brushed-metal knob — single LAF used for every knob
+struct MetalKnobLAF : public juce::LookAndFeel_V4
 {
-    juce::Colour accent { juce::Colours::orange };
-    juce::Colour fill   { juce::Colour(0xff363636) };
-
     void drawRotarySlider(juce::Graphics& g,
                           int x, int y, int width, int height,
                           float sliderPos, float startAngle, float endAngle,
                           juce::Slider&) override
     {
-        const float r  = (float)juce::jmin(width / 2, height / 2) - 4.0f;
+        const float r  = (float)juce::jmin(width / 2, height / 2) - 5.0f;
         const float cx = (float)x + width  * 0.5f;
         const float cy = (float)y + height * 0.5f;
+        if (r < 5.0f) return;
 
-        g.setColour(juce::Colours::black.withAlpha(0.45f));
-        g.fillEllipse(cx-r+2, cy-r+2, r*2, r*2);
-        g.setColour(fill);
-        g.fillEllipse(cx-r, cy-r, r*2, r*2);
-        g.setColour(accent.darker(0.55f));
-        g.drawEllipse(cx-r, cy-r, r*2, r*2, 1.5f);
+        // Drop shadow
+        g.setColour(juce::Colours::black.withAlpha(0.30f));
+        g.fillEllipse(cx - r + 2.0f, cy - r + 3.0f, r * 2.0f, r * 2.0f);
 
-        const float angle = startAngle + sliderPos * (endAngle - startAngle);
-        juce::Path ptr;
-        ptr.addRectangle(-1.4f, -r, 2.8f, r * 0.58f);
-        ptr.applyTransform(juce::AffineTransform::rotation(angle).translated(cx, cy));
-        g.setColour(accent);
-        g.fillPath(ptr);
-        g.setColour(accent.darker(0.6f));
-        g.fillEllipse(cx-2.5f, cy-2.5f, 5.0f, 5.0f);
+        // Outer bezel ring — dark radial gradient
+        {
+            juce::ColourGradient bz(juce::Colour(0xff585858), cx - r, cy - r,
+                                    juce::Colour(0xff242424), cx + r, cy + r, true);
+            g.setGradientFill(bz);
+            g.fillEllipse(cx - r, cy - r, r * 2.0f, r * 2.0f);
+        }
+
+        const float kr = r - 2.5f;   // inner knob cap radius
+
+        // Main cap — radial gradient: bright upper-left → dark lower-right
+        {
+            juce::ColourGradient body(
+                juce::Colour(0xffdcdcdc), cx - kr * 0.38f, cy - kr * 0.42f,
+                juce::Colour(0xff555555), cx + kr * 0.55f, cy + kr * 0.60f, true);
+            body.addColour(0.40, juce::Colour(0xffa8a8a8));
+            body.addColour(0.70, juce::Colour(0xff787878));
+            g.setGradientFill(body);
+            g.fillEllipse(cx - kr, cy - kr, kr * 2.0f, kr * 2.0f);
+        }
+
+        // Specular hot-spot — bright oval upper-left
+        {
+            juce::ColourGradient spec(
+                juce::Colours::white.withAlpha(0.72f),
+                cx - kr * 0.30f, cy - kr * 0.36f,
+                juce::Colours::transparentWhite,
+                cx + kr * 0.15f, cy + kr * 0.20f, true);
+            g.setGradientFill(spec);
+            g.fillEllipse(cx - kr, cy - kr, kr * 2.0f, kr * 2.0f);
+        }
+
+        // Cap rim
+        g.setColour(juce::Colour(0xff242424));
+        g.drawEllipse(cx - kr, cy - kr, kr * 2.0f, kr * 2.0f, 1.0f);
+
+        // Indicator dot — inset dark circle
+        const float angle   = startAngle + sliderPos * (endAngle - startAngle);
+        const float dotDist = kr * 0.66f;
+        const float dotX    = cx + std::sin(angle) * dotDist;
+        const float dotY    = cy - std::cos(angle) * dotDist;
+        const float dotR    = juce::jmax(2.0f, kr * 0.105f);
+
+        g.setColour(juce::Colour(0xff111111));
+        g.fillEllipse(dotX - dotR, dotY - dotR, dotR * 2.0f, dotR * 2.0f);
+        // tiny inner glint
+        g.setColour(juce::Colours::white.withAlpha(0.18f));
+        g.fillEllipse(dotX - dotR * 0.45f, dotY - dotR * 0.55f,
+                      dotR * 0.8f, dotR * 0.8f);
+
+        // Centre post
+        {
+            juce::ColourGradient cap(juce::Colour(0xff909090), cx - 2.0f, cy - 2.0f,
+                                     juce::Colour(0xff3a3a3a), cx + 2.0f, cy + 2.0f, true);
+            g.setGradientFill(cap);
+            g.fillEllipse(cx - 3.5f, cy - 3.5f, 7.0f, 7.0f);
+        }
     }
 };
 
-static SectionLAF gGateLAF, gDistLAF, gPhaseLAF, gDelayLAF, gAmpLAF, gRevLAF, gTunerLAF, gBTLAF;
+static MetalKnobLAF gMetalKnobLAF;
 
 static juce::Font monoFont(float size, int style = juce::Font::plain)
 {
@@ -97,22 +118,13 @@ static juce::Font monoFont(float size, int style = juce::Font::plain)
 //==============================================================================
 MainComponent::MainComponent()
 {
-    gGateLAF.accent   = kGateAccent;   gGateLAF.fill   = kGateKnob;
-    gDistLAF.accent   = kDistAccent;   gDistLAF.fill   = kDistKnob;
-    gPhaseLAF.accent  = kPhaseAccent;  gPhaseLAF.fill  = kPhaseKnob;
-    gDelayLAF.accent  = kDelayAccent;  gDelayLAF.fill  = kDelayKnob;
-    gAmpLAF.accent    = kAmpAccent;    gAmpLAF.fill    = kAmpKnob;
-    gRevLAF.accent    = kRevAccent;    gRevLAF.fill    = kRevKnob;
-    gTunerLAF.accent  = kTunerAccent;  gTunerLAF.fill  = kTunerKnob;
-    gBTLAF.accent     = kBTAccent;     gBTLAF.fill     = kBTKnob;
-
     formatManager.registerBasicFormats();
 
-    auto makeSectionLabel = [&](juce::Label& lbl, const juce::String& text, juce::Colour col)
+    auto makeSectionLabel = [&](juce::Label& lbl, const juce::String& text, juce::Colour /*col*/)
     {
         lbl.setText(text, juce::dontSendNotification);
         lbl.setFont(monoFont(11.0f, juce::Font::bold));
-        lbl.setColour(juce::Label::textColourId, col);
+        lbl.setColour(juce::Label::textColourId, kLabelDim);
         lbl.setJustificationType(juce::Justification::centredLeft);
         addAndMakeVisible(lbl);
     };
@@ -122,55 +134,55 @@ MainComponent::MainComponent()
     setupKnob(gateAttackKnob,  gateAttackLabel,  gateAttackValLabel,  "ATTACK",    0.20, kGateAccent);
     setupKnob(gateReleaseKnob, gateReleaseLabel, gateReleaseValLabel, "RELEASE",   0.50, kGateAccent);
     setupKnob(gateHoldKnob,    gateHoldLabel,    gateHoldValLabel,    "HOLD",      0.30, kGateAccent);
-    makeSectionLabel(gateSectionLabel, ">>  NOISE GATE", kGateAccentDim);
+    makeSectionLabel(gateSectionLabel, ">>  NOISE GATE", kLabelDim);
 
     // ---- Distortion ---------------------------------------------------------
     setupKnob(driveKnob,     driveLabel,     driveValLabel,     "DRIVE", 0.50, kDistAccent);
     setupKnob(toneKnob,      toneLabel,      toneValLabel,      "TONE",  0.50, kDistAccent);
     setupKnob(tightKnob,     tightLabel,     tightValLabel,     "TIGHT", 0.30, kDistAccent);
     setupKnob(distLevelKnob, distLevelLabel, distLevelValLabel, "LEVEL", 0.70, kDistAccent);
-    makeSectionLabel(distSectionLabel, ">>  POWER METAL DISTORTION", kDistAccentDim);
+    makeSectionLabel(distSectionLabel, ">>  POWER METAL DISTORTION", kLabelDim);
 
     // ---- Phaser -------------------------------------------------------------
     setupKnob(phaserRateKnob,     phaserRateLabel,     phaserRateValLabel,     "RATE",     0.30, kPhaseAccent);
     setupKnob(phaserDepthKnob,    phaserDepthLabel,    phaserDepthValLabel,    "DEPTH",    0.70, kPhaseAccent);
     setupKnob(phaserFeedbackKnob, phaserFeedbackLabel, phaserFeedbackValLabel, "FEEDBACK", 0.40, kPhaseAccent);
     setupKnob(phaserMixKnob,      phaserMixLabel,      phaserMixValLabel,      "MIX",      0.50, kPhaseAccent);
-    makeSectionLabel(phaserSectionLabel, ">>  PHASER", kPhaseAccentDim);
+    makeSectionLabel(phaserSectionLabel, ">>  PHASER", kLabelDim);
 
     // ---- Tape Delay ---------------------------------------------------------
     setupKnob(delayTimeKnob,     delayTimeLabel,     delayTimeValLabel,     "TIME",     0.35, kDelayAccent);
     setupKnob(delayFeedbackKnob, delayFeedbackLabel, delayFeedbackValLabel, "FEEDBACK", 0.40, kDelayAccent);
     setupKnob(delayMixKnob,      delayMixLabel,      delayMixValLabel,      "MIX",      0.30, kDelayAccent);
     setupKnob(delayWowKnob,      delayWowLabel,      delayWowValLabel,      "WOW",      0.25, kDelayAccent);
-    makeSectionLabel(delaySectionLabel, ">>  TAPE ECHO", kDelayAccentDim);
+    makeSectionLabel(delaySectionLabel, ">>  TAPE ECHO", kLabelDim);
 
     // ---- Amp preamp ---------------------------------------------------------
     setupKnob(gainKnob,   gainLabel,   gainValLabel,   "GAIN",   0.50, kAmpAccent);
     setupKnob(bassKnob,   bassLabel,   bassValLabel,   "BASS",   0.50, kAmpAccent);
     setupKnob(midKnob,    midLabel,    midValLabel,    "MID",    0.50, kAmpAccent);
     setupKnob(trebleKnob, trebleLabel, trebleValLabel, "TREBLE", 0.50, kAmpAccent);
-    makeSectionLabel(preampSectionLabel, ">>  PREAMP", kAmpAccentDim);
+    makeSectionLabel(preampSectionLabel, ">>  PREAMP", kLabelDim);
 
     // ---- Amp power ----------------------------------------------------------
     setupKnob(presenceKnob, presenceLabel, presenceValLabel, "PRESENCE", 0.50, kAmpAccent);
     setupKnob(masterKnob,   masterLabel,   masterValLabel,   "MASTER",   0.80, kAmpAccent);
-    makeSectionLabel(powerAmpSectionLabel, ">>  POWER AMP", kAmpAccentDim);
+    makeSectionLabel(powerAmpSectionLabel, ">>  POWER AMP", kLabelDim);
 
     // ---- Reverb -------------------------------------------------------------
     setupKnob(reverbMixKnob,   reverbMixLabel,   reverbMixValLabel,   "MIX",   0.25, kRevAccent);
     setupKnob(reverbSizeKnob,  reverbSizeLabel,  reverbSizeValLabel,  "SIZE",  0.50, kRevAccent);
     setupKnob(reverbDampKnob,  reverbDampLabel,  reverbDampValLabel,  "DAMP",  0.50, kRevAccent);
     setupKnob(reverbWidthKnob, reverbWidthLabel, reverbWidthValLabel, "WIDTH", 1.00, kRevAccent);
-    makeSectionLabel(reverbSectionLabel, ">>  REVERB", kRevAccentDim);
+    makeSectionLabel(reverbSectionLabel, ">>  REVERB", kLabelDim);
 
     // ---- Tuner --------------------------------------------------------------
     makeSectionLabel(tunerSectionLabel, ">>  CHROMATIC TUNER", kTunerAccentDim);
 
-    tunerOnButton.setColour(juce::TextButton::buttonColourId,   juce::Colour(0xff1a3030));
-    tunerOnButton.setColour(juce::TextButton::textColourOffId,  kTunerAccent);
-    tunerOnButton.setColour(juce::TextButton::buttonOnColourId, kTunerAccent);
-    tunerOnButton.setColour(juce::TextButton::textColourOnId,   juce::Colours::black);
+    tunerOnButton.setColour(juce::TextButton::buttonColourId,   juce::Colour(0xff909090));
+    tunerOnButton.setColour(juce::TextButton::textColourOffId,  kLabelText);
+    tunerOnButton.setColour(juce::TextButton::buttonOnColourId, juce::Colour(0xff404040));
+    tunerOnButton.setColour(juce::TextButton::textColourOnId,   juce::Colours::white);
     tunerOnButton.setClickingTogglesState(true);
     tunerOnButton.onClick = [this]
     {
@@ -191,9 +203,9 @@ MainComponent::MainComponent()
     tunerNoteLabel.setText  ("--",  juce::dontSendNotification);
     tunerCentsLabel.setText ("",    juce::dontSendNotification);
     tunerFreqLabel.setText  ("",    juce::dontSendNotification);
-    styleLabel(tunerNoteLabel,  40.0f, juce::Font::bold,  kTunerAccent);
+    styleLabel(tunerNoteLabel,  40.0f, juce::Font::bold,  kTunerAccent);   // stays teal
     styleLabel(tunerCentsLabel, 14.0f, juce::Font::plain, kValueText);
-    styleLabel(tunerFreqLabel,  11.0f, juce::Font::plain, kValueText);
+    styleLabel(tunerFreqLabel,  11.0f, juce::Font::plain, kValueText);    // dark on silver
 
     // ---- Backing Track ------------------------------------------------------
     makeSectionLabel(btSectionLabel, ">>  BACKING TRACK", kBTAccentDim);
@@ -206,7 +218,7 @@ MainComponent::MainComponent()
         addAndMakeVisible(btn);
     };
 
-    styleBtn(btLoadButton, juce::Colour(0xff251530), kBTAccent);
+    styleBtn(btLoadButton, juce::Colour(0xff909090), kLabelText);
     btLoadButton.onClick = [this]
     {
         fileChooser = std::make_unique<juce::FileChooser>(
@@ -238,7 +250,7 @@ MainComponent::MainComponent()
             });
     };
 
-    styleBtn(btPlayButton, juce::Colour(0xff1a2515), kBTAccent);
+    styleBtn(btPlayButton, juce::Colour(0xff909090), kLabelText);
     btPlayButton.onClick = [this]
     {
         if (transportSource.isPlaying())
@@ -259,10 +271,10 @@ MainComponent::MainComponent()
     };
 
     btLoopButton.setClickingTogglesState(true);
-    btLoopButton.setColour(juce::TextButton::buttonColourId,    juce::Colour(0xff201520));
-    btLoopButton.setColour(juce::TextButton::textColourOffId,   kBTAccent);
-    btLoopButton.setColour(juce::TextButton::buttonOnColourId,  kBTAccent);
-    btLoopButton.setColour(juce::TextButton::textColourOnId,    juce::Colours::black);
+    btLoopButton.setColour(juce::TextButton::buttonColourId,    juce::Colour(0xff909090));
+    btLoopButton.setColour(juce::TextButton::textColourOffId,   kLabelText);
+    btLoopButton.setColour(juce::TextButton::buttonOnColourId,  juce::Colour(0xff404040));
+    btLoopButton.setColour(juce::TextButton::textColourOnId,    juce::Colours::white);
     btLoopButton.setMouseCursor(juce::MouseCursor::PointingHandCursor);
     btLoopButton.onClick = [this]
     {
@@ -275,7 +287,7 @@ MainComponent::MainComponent()
     addAndMakeVisible(btLoopButton);
 
     // Volume knob (manually set up — doesn't go through setupKnob)
-    btVolumeKnob.setLookAndFeel(&gBTLAF);
+    btVolumeKnob.setLookAndFeel(&gMetalKnobLAF);
     btVolumeKnob.setSliderStyle(juce::Slider::RotaryVerticalDrag);
     btVolumeKnob.setRange(0.0, 1.0);
     btVolumeKnob.setValue(0.80, juce::dontSendNotification);
@@ -284,7 +296,7 @@ MainComponent::MainComponent()
     addAndMakeVisible(btVolumeKnob);
 
     btVolumeLabel.setText("VOLUME", juce::dontSendNotification);
-    styleLabel(btVolumeLabel,  13.0f, juce::Font::bold,  kBTAccent);
+    styleLabel(btVolumeLabel,  12.0f, juce::Font::bold,  kLabelText);
     btVolumeValLabel.setText("80%", juce::dontSendNotification);
     styleLabel(btVolumeValLabel, 11.0f, juce::Font::plain, kValueText);
 
@@ -293,8 +305,8 @@ MainComponent::MainComponent()
                juce::Justification::centredLeft);
 
     // ---- Audio settings button ----------------------------------------------
-    audioSettingsButton.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xff2a2a2e));
-    audioSettingsButton.setColour(juce::TextButton::textColourOffId, kAmpAccent);
+    audioSettingsButton.setColour(juce::TextButton::buttonColourId,  juce::Colour(0xff383838));
+    audioSettingsButton.setColour(juce::TextButton::textColourOffId, juce::Colours::white);
     audioSettingsButton.setMouseCursor(juce::MouseCursor::PointingHandCursor);
     audioSettingsButton.onClick = [this]
     {
@@ -333,14 +345,8 @@ void MainComponent::setupKnob(juce::Slider& knob, juce::Label& nameLabel,
                                const juce::String& name, double defaultVal,
                                juce::Colour accentColour)
 {
-    SectionLAF* laf = (accentColour == kGateAccent)  ? &gGateLAF
-                    : (accentColour == kDistAccent)   ? &gDistLAF
-                    : (accentColour == kPhaseAccent)  ? &gPhaseLAF
-                    : (accentColour == kDelayAccent)  ? &gDelayLAF
-                    : (accentColour == kRevAccent)    ? &gRevLAF
-                                                      : &gAmpLAF;
-
-    knob.setLookAndFeel(laf);
+    juce::ignoreUnused(accentColour);   // all knobs now use the single chrome LAF
+    knob.setLookAndFeel(&gMetalKnobLAF);
     knob.setSliderStyle(juce::Slider::RotaryVerticalDrag);
     knob.setRange(0.0, 1.0);
     knob.setValue(defaultVal, juce::dontSendNotification);
@@ -382,8 +388,8 @@ void MainComponent::setupKnob(juce::Slider& knob, juce::Label& nameLabel,
 
     nameLabel.setText(name, juce::dontSendNotification);
     nameLabel.setJustificationType(juce::Justification::centred);
-    nameLabel.setFont(monoFont(13.0f, juce::Font::bold));
-    nameLabel.setColour(juce::Label::textColourId, accentColour);
+    nameLabel.setFont(monoFont(12.0f, juce::Font::bold));
+    nameLabel.setColour(juce::Label::textColourId, kLabelText);
     addAndMakeVisible(nameLabel);
 
     valueLabel.setText(formatValue(name, defaultVal), juce::dontSendNotification);
@@ -668,48 +674,80 @@ void MainComponent::paint(juce::Graphics& g)
     const int preampEndX = (int)(getWidth() * 0.43f);
     const int powerEndX  = (int)(getWidth() * 0.60f);
 
-    auto drawPanel = [&](juce::Colour fillCol, juce::Colour rimCol,
-                         int x, int y, int w, int h, bool grad = false)
+    // ---- Title bar ----------------------------------------------------------
     {
-        juce::Rectangle<float> r((float)x,(float)y,(float)w,(float)h);
-        g.setColour(fillCol);
+        juce::ColourGradient tb(juce::Colour(0xff282828), 0, 0,
+                                juce::Colour(0xff1a1a1a), 0, (float)titleBarH, false);
+        g.setGradientFill(tb);
+        g.fillRect(0, 0, getWidth(), titleBarH);
+        g.setColour(juce::Colour(0xff080808));
+        g.drawHorizontalLine(titleBarH - 1, 0.0f, (float)getWidth());
+        g.setColour(juce::Colours::white.withAlpha(0.10f));
+        g.drawHorizontalLine(0, 0.0f, (float)getWidth());
+        g.setColour(juce::Colours::white.withAlpha(0.90f));
+        g.setFont(monoFont(13.0f, juce::Font::bold));
+        g.drawText("GUITAR AMP MODELER",
+                   juce::Rectangle<int>(0, 0, getWidth(), titleBarH),
+                   juce::Justification::centred);
+    }
+
+    const int row6Y     = titleBarH + (rowH + m) * 5;
+    const int tunerEndX = (int)(getWidth() * 0.38f);
+
+    // ---- Brushed-metal panel painter ----------------------------------------
+    auto drawMetalPanel = [&](int x, int y, int w, int h)
+    {
+        juce::Rectangle<float> r((float)x, (float)y, (float)w, (float)h);
+
+        // Base vertical gradient
+        juce::ColourGradient base(kMetalTop, 0.0f, (float)y,
+                                  kMetalBot, 0.0f, (float)(y + h), false);
+        g.setGradientFill(base);
         g.fillRoundedRectangle(r, 8.0f);
-        if (grad)
+
+        // Horizontal brush-marks
         {
-            juce::ColourGradient gr(rimCol.withAlpha(0.07f), 0,(float)y,
-                                    juce::Colours::transparentBlack, 0,(float)(y+50), false);
-            g.setGradientFill(gr);
-            g.fillRoundedRectangle(r, 8.0f);
+            juce::Graphics::ScopedSaveState ss(g);
+            g.reduceClipRegion(r.toNearestInt());
+            for (int ly = y; ly < y + h; ++ly)
+            {
+                float alpha = (ly % 4 == 0) ? 0.055f
+                            : (ly % 2 == 0) ? 0.020f
+                                            : 0.008f;
+                g.setColour(juce::Colours::white.withAlpha(alpha));
+                g.drawHorizontalLine(ly, (float)x, (float)(x + w));
+            }
         }
-        g.setColour(rimCol.darker(0.3f));
-        g.drawRoundedRectangle(r, 8.0f, 1.2f);
+
+        // Top-edge specular highlight
+        g.setColour(juce::Colours::white.withAlpha(0.60f));
+        g.drawLine((float)(x + 9), (float)(y + 1),
+                   (float)(x + w - 9), (float)(y + 1), 1.0f);
+
+        // Bottom-edge shadow
+        g.setColour(juce::Colours::black.withAlpha(0.22f));
+        g.drawLine((float)(x + 9), (float)(y + h - 1),
+                   (float)(x + w - 9), (float)(y + h - 1), 1.0f);
+
+        // Panel border
+        g.setColour(kMetalRim);
+        g.drawRoundedRectangle(r, 8.0f, 1.5f);
     };
 
-    // Title bar
-    g.setColour(juce::Colour(0xff202024));
-    g.fillRect(0, 0, getWidth(), titleBarH);
-    g.setColour(kSeparator);
-    g.drawHorizontalLine(titleBarH - 1, 0.0f, (float)getWidth());
-    g.setColour(kAmpAccent);
-    g.setFont(monoFont(13.0f, juce::Font::bold));
-    g.drawText("GUITAR AMP MODELER",
-               juce::Rectangle<int>(0, 0, getWidth(), titleBarH),
-               juce::Justification::centred);
+    // Rows 1-4
+    drawMetalPanel(m, row1Y, getWidth() - m * 2, rowH);
+    drawMetalPanel(m, row2Y, getWidth() - m * 2, rowH);
+    drawMetalPanel(m, row3Y, getWidth() - m * 2, rowH);
+    drawMetalPanel(m, row4Y, getWidth() - m * 2, rowH);
 
-    const int row6Y      = titleBarH + (rowH + m) * 5;
-    const int tunerEndX  = (int)(getWidth() * 0.38f);
+    // Row 5 — three sub-panels
+    drawMetalPanel(m,               row5Y, preampEndX - m * 2,            rowH);
+    drawMetalPanel(preampEndX + m,  row5Y, powerEndX - preampEndX - m,    rowH);
+    drawMetalPanel(powerEndX + m,   row5Y, getWidth() - powerEndX - m * 2, rowH);
 
-    drawPanel(kGatePanel,  kGateAccent,  m, row1Y, getWidth()-m*2, rowH, true);
-    drawPanel(kDistPanel,  kDistAccent,  m, row2Y, getWidth()-m*2, rowH, true);
-    drawPanel(kPhasePanel, kPhaseAccent, m, row3Y, getWidth()-m*2, rowH, true);
-    drawPanel(kDelayPanel, kDelayAccent, m, row4Y, getWidth()-m*2, rowH, true);
-
-    drawPanel(kAmpPanel,   kSeparator,              m,            row5Y, preampEndX-m*2,          rowH);
-    drawPanel(kPowerPanel, kSeparator,              preampEndX+m, row5Y, powerEndX-preampEndX-m,  rowH);
-    drawPanel(kRevPanel,   kRevAccent.darker(0.4f), powerEndX+m,  row5Y, getWidth()-powerEndX-m*2, rowH);
-
-    drawPanel(kTunerPanel, kTunerAccent,            m,            row6Y, tunerEndX-m*2,             rowH, true);
-    drawPanel(kBTPanel,    kBTAccent,               tunerEndX+m,  row6Y, getWidth()-tunerEndX-m*2,  rowH, true);
+    // Row 6 — tuner + backing track
+    drawMetalPanel(m,              row6Y, tunerEndX - m * 2,              rowH);
+    drawMetalPanel(tunerEndX + m,  row6Y, getWidth() - tunerEndX - m * 2, rowH);
 }
 
 void MainComponent::resized()
