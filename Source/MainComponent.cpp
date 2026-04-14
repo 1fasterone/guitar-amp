@@ -1,4 +1,5 @@
 #include "MainComponent.h"
+#include <BinaryData.h>
 
 //==============================================================================
 // ---- Unified hardware metal palette ----------------------------------------
@@ -110,6 +111,196 @@ struct MetalKnobLAF : public juce::LookAndFeel_V4
 
 static MetalKnobLAF gMetalKnobLAF;
 
+//==============================================================================
+// VUMeterComponent — Marantz-style blue fluorescent bar display
+//==============================================================================
+class VUMeterComponent : public juce::Component
+{
+public:
+    VUMeterComponent() = default;
+
+    /** Call from timer callback (message thread). Values in dBFS (-80 to +3). */
+    void setLevels (float dBL, float dBR)
+    {
+        applyBallistics (dBL, displayL, peakHoldL, holdTicksL);
+        applyBallistics (dBR, displayR, peakHoldR, holdTicksR);
+        repaint();
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        const int w = getWidth();
+        const int h = getHeight();
+
+        // ── Dark display panel background ────────────────────────────────────
+        juce::ColourGradient bg (juce::Colour (0xff060810), 0.f, 0.f,
+                                 juce::Colour (0xff0a0c18), 0.f, (float)h, false);
+        g.setGradientFill (bg);
+        g.fillRoundedRectangle (0.f, 0.f, (float)w, (float)h, 5.f);
+
+        // Inner rim — subtle blue tinge
+        g.setColour (juce::Colour (0xff1c2540));
+        g.drawRoundedRectangle (0.5f, 0.5f, (float)w - 1.f, (float)h - 1.f, 5.f, 1.f);
+
+        // ── Layout ────────────────────────────────────────────────────────────
+        const int scaleH = 14;
+        const int chanH  = (h - scaleH - 12) / 2;
+        const int meterX = 22;
+        const int meterW = w - meterX - 6;
+        const int chanLY = 4;
+        const int chanRY = chanLY + chanH + 4;
+        const int scaleY = chanRY + chanH + 4;
+
+        drawChannel (g, meterX, chanLY, meterW, chanH, displayL, peakHoldL, "L");
+        drawChannel (g, meterX, chanRY, meterW, chanH, displayR, peakHoldR, "R");
+        drawScale   (g, meterX, scaleY, meterW, scaleH);
+    }
+
+private:
+    //──────────────────────────────────────────────────────────────────────────
+    float displayL   = -80.f,  displayR   = -80.f;
+    float peakHoldL  = -80.f,  peakHoldR  = -80.f;
+    float holdTicksL =   0.f,  holdTicksR =   0.f;
+
+    static constexpr float kMinDB   = -40.f;
+    static constexpr float kMaxDB   =   3.f;
+    static constexpr int   kNumSegs =  43;     // 1 segment per dB
+
+    //──────────────────────────────────────────────────────────────────────────
+    static void applyBallistics (float input,
+                                 float& display, float& peak, float& holdTicks)
+    {
+        input = juce::jlimit (-80.f, kMaxDB, input);
+
+        // VU-style: quick attack, slower release (coefficients at 15 fps)
+        if (input > display)
+            display += (input - display) * 0.55f;
+        else
+            display += (input - display) * 0.12f;
+
+        // Peak hold: 2 s @ 15 fps = 30 ticks, then slow fall (~2 dB/s)
+        if (input >= peak)        { peak = input; holdTicks = 30.f; }
+        else if (holdTicks > 0.f)   holdTicks -= 1.f;
+        else                        peak = std::max (peak - 0.13f, input);
+    }
+
+    //──────────────────────────────────────────────────────────────────────────
+    static int dbToSeg (float db)
+    {
+        float t = (db - kMinDB) / (kMaxDB - kMinDB);
+        return (int) juce::jlimit (0.f, (float)(kNumSegs - 1), t * (float)kNumSegs);
+    }
+
+    static float segToDb (int seg)
+    {
+        return kMinDB + ((float)seg / kNumSegs) * (kMaxDB - kMinDB);
+    }
+
+    // Zone-based colour per segment
+    static juce::Colour segColour (int seg, bool lit)
+    {
+        const float db = segToDb (seg);
+        if (db >= 0.f)    return lit ? juce::Colour (0xffff2200) : juce::Colour (0xff1a0300);
+        if (db >= -3.f)   return lit ? juce::Colour (0xff00d4ff) : juce::Colour (0xff001e28);
+        if (db >= -10.f)  return lit ? juce::Colour (0xff009fef) : juce::Colour (0xff000e1e);
+        /* low zone */    return lit ? juce::Colour (0xff1166dd) : juce::Colour (0xff000918);
+    }
+
+    //──────────────────────────────────────────────────────────────────────────
+    void drawChannel (juce::Graphics& g,
+                      int x, int y, int w, int h,
+                      float dispDB, float peakDB, const char* label)
+    {
+        const int   litSegs = dbToSeg (dispDB);
+        const int   pkSeg   = dbToSeg (peakDB);
+        const float segW    = (float)w / kNumSegs;
+        const float inner   = (float)h - 2.f;
+
+        // ── Ambient bloom behind lit portion ─────────────────────────────────
+        if (litSegs > 0)
+        {
+            const float litW = litSegs * segW;
+            juce::ColourGradient halo (
+                juce::Colour (0xff0044bb).withAlpha (0.22f),
+                (float)x,               (float)y,
+                juce::Colours::transparentBlack,
+                (float)x + litW + 18.f, (float)y, false);
+            g.setGradientFill (halo);
+            g.fillRect ((float)x, (float)(y - 4), litW + 18.f, (float)(h + 8));
+        }
+
+        // ── Channel label (L / R) ─────────────────────────────────────────────
+        g.setFont   (juce::Font (juce::Font::getDefaultMonospacedFontName(),
+                                 10.f, juce::Font::bold));
+        g.setColour (juce::Colour (0xff2d6e9a));
+        g.drawText  (juce::String (label), x - 20, y, 18, h,
+                     juce::Justification::centredRight);
+
+        // ── Dark track ────────────────────────────────────────────────────────
+        g.setColour (juce::Colour (0xff030710));
+        g.fillRect  ((float)x, (float)(y + 1), (float)w, inner);
+
+        // ── Segments ─────────────────────────────────────────────────────────
+        for (int i = 0; i < kNumSegs; ++i)
+        {
+            const bool  lit = (i < litSegs);
+            const float sx  = (float)x + i * segW + 0.5f;
+            const float sw  = segW - 1.5f;
+
+            g.setColour (segColour (i, lit));
+            g.fillRect  (sx, (float)(y + 1), sw, inner);
+
+            // Per-segment bloom on lit segments
+            if (lit)
+            {
+                g.setColour (segColour (i, true).withAlpha (0.28f));
+                g.fillRect  (sx - 1.f, (float)(y - 1), sw + 2.f, (float)(h + 2));
+            }
+        }
+
+        // ── Peak hold tick ────────────────────────────────────────────────────
+        if (peakDB > kMinDB && pkSeg > 0 && pkSeg < kNumSegs)
+        {
+            const float  px  = (float)x + pkSeg * segW + 0.5f;
+            const float  pw  = segW - 1.5f;
+            juce::Colour pkC = (peakDB >= 0.f) ? juce::Colour (0xffff4400)
+                                                : juce::Colour (0xffd0ecff);
+            g.setColour (pkC);
+            g.fillRect  (px, (float)(y + 1), pw, inner);
+            // Glow halo around tick
+            g.setColour (pkC.withAlpha (0.50f));
+            g.fillRect  (px - 1.5f, (float)(y - 1), pw + 3.f, (float)(h + 2));
+        }
+    }
+
+    //──────────────────────────────────────────────────────────────────────────
+    void drawScale (juce::Graphics& g, int x, int y, int w, int scaleH)
+    {
+        const float segW = (float)w / kNumSegs;
+        g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(),
+                               9.f, juce::Font::plain));
+
+        struct ScaleTick { float db; const char* txt; };
+        const ScaleTick ticks[] = {
+            {-40.f,"-40"}, {-30.f,"-30"}, {-20.f,"-20"},
+            {-10.f,"-10"}, { -6.f, "-6"}, { -3.f, "-3"},
+            {  0.f,  "0"}, {  3.f, "+3"}
+        };
+
+        for (const auto& t : ticks)
+        {
+            const float tx = (float)x + dbToSeg (t.db) * segW;
+            g.setColour (juce::Colour (0xff152840));
+            g.fillRect  (tx, (float)y, 1.f, 4.f);
+            g.setColour (juce::Colour (0xff2255aa));
+            g.drawText  (juce::String (t.txt),
+                         (int)tx - 12, y + 4, 24, scaleH - 4,
+                         juce::Justification::centred);
+        }
+    }
+};
+
+//==============================================================================
 static juce::Font monoFont(float size, int style = juce::Font::plain)
 {
     return juce::Font(juce::Font::getDefaultMonospacedFontName(), size, style);
@@ -400,8 +591,38 @@ MainComponent::MainComponent()
     };
     addAndMakeVisible(audioSettingsButton);
 
+    // ---- Bypass buttons (one per effect section) ----------------------------
+    auto setupBypass = [&](juce::TextButton& btn, std::atomic<bool>& flag)
+    {
+        btn.setClickingTogglesState (true);
+        // Active state (toggle=false): dark panel, Marantz-blue "ON" text
+        btn.setColour (juce::TextButton::buttonColourId,   juce::Colour (0xff252525));
+        btn.setColour (juce::TextButton::textColourOffId,  juce::Colour (0xff1a7acc));
+        // Bypassed state (toggle=true): darker, dim grey "BYP" text
+        btn.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff141414));
+        btn.setColour (juce::TextButton::textColourOnId,   juce::Colour (0xff555555));
+        btn.setMouseCursor (juce::MouseCursor::PointingHandCursor);
+        btn.onClick = [&btn, &flag]
+        {
+            flag = btn.getToggleState();
+            btn.setButtonText (btn.getToggleState() ? "BYP" : "ON");
+        };
+        addAndMakeVisible (btn);
+    };
+
+    setupBypass (gateBypassBtn,   gateBypass);
+    setupBypass (distBypassBtn,   distBypass);
+    setupBypass (phaserBypassBtn, phaserBypass);
+    setupBypass (delayBypassBtn,  delayBypass);
+    setupBypass (preampBypassBtn, preampBypass);
+    setupBypass (reverbBypassBtn, reverbBypass);
+
+    // ---- VU Meter -----------------------------------------------------------
+    vuMeter = std::make_unique<VUMeterComponent>();
+    addAndMakeVisible(*vuMeter);
+
     startTimer(66);   // 15 fps value-label refresh
-    setSize(1000, 985);
+    setSize(1000, 940);
     setAudioChannels(1, 2);
 }
 
@@ -593,6 +814,17 @@ void MainComponent::timerCallback()
     btVolumeValLabel.setText(
         juce::String((int)(btVolumeKnob.getValue() * 100.0)) + "%",
         juce::dontSendNotification);
+
+    // ---- VU meter -----------------------------------------------------------
+    if (vuMeter != nullptr && dspReady.load (std::memory_order_relaxed))
+    {
+        auto toDb = [](float lin) -> float
+        {
+            return lin > 1.0e-7f ? 20.0f * std::log10 (lin) : -80.0f;
+        };
+        vuMeter->setLevels (toDb (vuPeakL.load (std::memory_order_relaxed)),
+                            toDb (vuPeakR.load (std::memory_order_relaxed)));
+    }
 }
 
 //==============================================================================
@@ -681,6 +913,14 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& info)
 
     // Pre-fetch backing track block (done once per audio callback, not per sample)
     // backingBuffer was pre-allocated in prepareToPlay — never resize on the audio thread
+    // Cache bypass flags once per block (avoid per-sample atomic reads)
+    const bool bpGate   = gateBypass  .load (std::memory_order_relaxed);
+    const bool bpDist   = distBypass  .load (std::memory_order_relaxed);
+    const bool bpPreamp = preampBypass.load (std::memory_order_relaxed);
+    const bool bpPhaser = phaserBypass.load (std::memory_order_relaxed);
+    const bool bpDelay  = delayBypass .load (std::memory_order_relaxed);
+    const bool bpReverb = reverbBypass.load (std::memory_order_relaxed);
+
     const bool btPlaying = transportSource.isPlaying();
     if (btPlaying)
     {
@@ -702,13 +942,12 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& info)
             pitchDetector.write(rawIn);
 
         double s = (double)rawIn;
-        s = noiseGate.process((float)s);
-        s = powerMetalDist.process(s);
-        s = gainStage.process((float)s);
-        s = toneStack.process(s);
-        s = presenceFilter.process(s);
-        s = phaser.process((float)s);
-        s = tapeDelay.process((float)s);
+        if (!bpGate)   s = noiseGate.process ((float)s);
+        if (!bpDist)   s = powerMetalDist.process (s);
+        if (!bpPreamp) { s = gainStage.process ((float)s); s = toneStack.process (s); }
+        s = presenceFilter.process (s);   // presence always active
+        if (!bpPhaser) s = phaser.process ((float)s);
+        if (!bpDelay)  s = tapeDelay.process ((float)s);
         outL[i] = (float)s;
     }
 
@@ -721,7 +960,10 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& info)
     for (int i = 0; i < info.numSamples; ++i)
     {
         float reverbL, reverbR;
-        reverb.process(outL[i], reverbL, reverbR);
+        if (!bpReverb)
+            reverb.process (outL[i], reverbL, reverbR);
+        else
+            reverbL = reverbR = outL[i];
 
         float finalL = masterVolume.process(reverbL);
         float finalR = masterVolume.process(reverbR);
@@ -735,6 +977,26 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& info)
         outL[i] = finalL;
         if (outR != nullptr)
             outR[i] = finalR;
+    }
+
+    // ---- Peak capture for VU meters (audio thread) --------------------------
+    // Compute block peak, then max-with-slow-decay into the shared atomics so
+    // the timer always sees the highest recent sample without snapping to zero.
+    {
+        float blkL = 0.0f, blkR = 0.0f;
+        for (int i = 0; i < info.numSamples; ++i)
+        {
+            blkL = std::max (blkL, std::abs (outL[i]));
+            if (outR) blkR = std::max (blkR, std::abs (outR[i]));
+        }
+        if (outR == nullptr) blkR = blkL;
+
+        // 0.9985 per block ≈ -4.5 dB/s decay when silent
+        const float decay = 0.9985f;
+        vuPeakL.store (std::max (blkL, vuPeakL.load (std::memory_order_relaxed) * decay),
+                       std::memory_order_relaxed);
+        vuPeakR.store (std::max (blkR, vuPeakR.load (std::memory_order_relaxed) * decay),
+                       std::memory_order_relaxed);
     }
 }
 
@@ -750,8 +1012,8 @@ void MainComponent::paint(juce::Graphics& g)
     g.fillAll(kBackground);
 
     const int m         = 6;
-    const int rowH      = 150;
-    const int titleBarH = 28;
+    const int rowH      = 140;
+    const int titleBarH = 68;
 
     const int row1Y = titleBarH;
     const int row2Y = titleBarH + (rowH + m);
@@ -763,21 +1025,37 @@ void MainComponent::paint(juce::Graphics& g)
     const int powerEndX  = (int)(getWidth() * 0.53f);
     const int cabEndX    = (int)(getWidth() * 0.73f);
 
-    // ---- Title bar ----------------------------------------------------------
+    // ---- Title bar — dark panel houses the BLUESTEEL brand + VU meters ------
     {
-        juce::ColourGradient tb(juce::Colour(0xff282828), 0, 0,
-                                juce::Colour(0xff1a1a1a), 0, (float)titleBarH, false);
-        g.setGradientFill(tb);
-        g.fillRect(0, 0, getWidth(), titleBarH);
-        g.setColour(juce::Colour(0xff080808));
-        g.drawHorizontalLine(titleBarH - 1, 0.0f, (float)getWidth());
-        g.setColour(juce::Colours::white.withAlpha(0.10f));
-        g.drawHorizontalLine(0, 0.0f, (float)getWidth());
-        g.setColour(juce::Colours::white.withAlpha(0.90f));
-        g.setFont(monoFont(13.0f, juce::Font::bold));
-        g.drawText("GUITAR AMP MODELER",
-                   juce::Rectangle<int>(0, 0, getWidth(), titleBarH),
-                   juce::Justification::centred);
+        // Very dark, almost-black background — frames the display like a Marantz front panel
+        juce::ColourGradient tb (juce::Colour (0xff0e1018), 0, 0,
+                                 juce::Colour (0xff080a12), 0, (float)titleBarH, false);
+        g.setGradientFill (tb);
+        g.fillRect (0, 0, getWidth(), titleBarH);
+
+        // Top edge — faint blue highlight
+        g.setColour (juce::Colour (0xff1c2a40).withAlpha (0.6f));
+        g.drawHorizontalLine (0, 0.0f, (float)getWidth());
+
+        // Bottom separator — subtle blue rule
+        g.setColour (juce::Colour (0xff1c2a40));
+        g.drawHorizontalLine (titleBarH - 1, 0.0f, (float)getWidth());
+
+        // ── BlueSteel logo icon — left side ──────────────────────────────────
+        {
+            auto logo = juce::ImageCache::getFromMemory (
+                BinaryData::bluesteel_png, BinaryData::bluesteel_pngSize);
+            if (logo.isValid())
+            {
+                const int logoH = titleBarH - 6;
+                const int logoW = juce::roundToInt (
+                    logo.getWidth() * (float)logoH / logo.getHeight());
+                g.drawImageWithin (logo,
+                    3, 3, logoW, logoH,
+                    juce::RectanglePlacement::centred |
+                    juce::RectanglePlacement::onlyReduceInSize);
+            }
+        }
     }
 
     const int row6Y     = titleBarH + (rowH + m) * 5;
@@ -843,8 +1121,8 @@ void MainComponent::paint(juce::Graphics& g)
 void MainComponent::resized()
 {
     const int m         = 10;
-    const int titleBarH = 28;
-    const int rowH      = 150;
+    const int titleBarH = 68;
+    const int rowH      = 140;
     const int labelH    = 18;
     const int valH      = 16;
     const int secH      = 20;
@@ -861,7 +1139,17 @@ void MainComponent::resized()
     const int cabEndX    = (int)(getWidth() * 0.73f);
     const int tunerEndX  = (int)(getWidth() * 0.38f);
 
-    audioSettingsButton.setBounds(getWidth() - 190 - m, 3, 190, titleBarH - 6);
+    // Settings button — right side of title bar, vertically centred
+    const int btnH = 26;
+    audioSettingsButton.setBounds (getWidth() - 200 - m, (titleBarH - btnH) / 2, 200, btnH);
+
+    // VU meter — occupies the centre of the title bar between branding and button
+    if (vuMeter != nullptr)
+    {
+        const int vuX = 70;   // just right of the logo icon
+        const int vuW = (getWidth() - 200 - m - 8) - vuX;
+        vuMeter->setBounds (vuX, 4, vuW, titleBarH - 8);
+    }
 
     auto placeKnob = [&](juce::Rectangle<int>& area, int w,
                          juce::Slider& knob, juce::Label& nameLbl, juce::Label& valLbl)
@@ -886,6 +1174,20 @@ void MainComponent::resized()
         placeKnob(area, kw, k3, n3, v3);
         placeKnob(area, kw, k4, n4, v4);
     };
+
+    // Bypass buttons — positioned in top-right of each section header
+    {
+        const int bw = 46, bh = secH - 2;
+        const int bx = getWidth() - m * 2 - bw;
+        gateBypassBtn  .setBounds (bx, row1Y + 1, bw, bh);
+        distBypassBtn  .setBounds (bx, row2Y + 1, bw, bh);
+        phaserBypassBtn.setBounds (bx, row3Y + 1, bw, bh);
+        delayBypassBtn .setBounds (bx, row4Y + 1, bw, bh);
+        // Preamp — right side of preamp sub-panel
+        preampBypassBtn.setBounds (preampEndX - m - bw, row5Y + 1, bw, bh);
+        // Reverb — right side of reverb sub-panel
+        reverbBypassBtn.setBounds (getWidth() - m * 2 - bw, row5Y + 1, bw, bh);
+    }
 
     layout4(row1Y, gateSectionLabel,
             gateThreshKnob,    gateThreshLabel,    gateThreshValLabel,

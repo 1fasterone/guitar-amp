@@ -21,17 +21,39 @@ juce_add_gui_app(GuitarAmp
 
 juce_generate_juce_header(GuitarAmp)
 
+juce_add_binary_data(GuitarAmpAssets
+    SOURCES Source/bluesteel.png
+)
+
 target_sources(GuitarAmp PRIVATE
     Source/Main.cpp
     Source/MainComponent.cpp
 )
 
+# --- ASIO support -----------------------------------------------------------
+# Requires the free Steinberg ASIO SDK (register at steinberg.net/developers).
+# Set ASIO_SDK_DIR to the folder that contains asiosdk_2.3.x/common/asio.h
+# e.g.  cmake -DASIO_SDK_DIR="C:/SDKs/ASIOSDK2.3" ..
+# If the variable is not set, ASIO is silently disabled and WASAPI is used.
+if(DEFINED ASIO_SDK_DIR AND EXISTS "${ASIO_SDK_DIR}/common/asio.h")
+    message(STATUS "ASIO SDK found at ${ASIO_SDK_DIR} — enabling ASIO support")
+    target_include_directories(GuitarAmp PRIVATE "${ASIO_SDK_DIR}/common")
+    set(JUCE_ASIO_FLAG JUCE_ASIO=1)
+else()
+    message(STATUS "ASIO SDK not found — ASIO disabled (WASAPI Exclusive recommended)")
+    set(JUCE_ASIO_FLAG JUCE_ASIO=0)
+endif()
+# ---------------------------------------------------------------------------
+
 target_compile_definitions(GuitarAmp PRIVATE
+    ${JUCE_ASIO_FLAG}
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:GuitarAmp,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:GuitarAmp,JUCE_VERSION>"
 )
+
+target_link_libraries(GuitarAmp PRIVATE GuitarAmpAssets)
 
 target_link_libraries(GuitarAmp PRIVATE
     juce::juce_audio_basics

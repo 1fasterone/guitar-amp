@@ -1,5 +1,7 @@
 #pragma once
 #include <JuceHeader.h>
+
+class VUMeterComponent;   // defined in MainComponent.cpp
 #include "DSP/NoiseGate.h"
 #include "DSP/PowerMetalDistortion.h"
 #include "DSP/GainStage.h"
@@ -109,8 +111,19 @@ private:
     juce::Label      btFileLabel;
     juce::Label      btSectionLabel;
 
+    // Bypass toggle buttons — one per effect section
+    juce::TextButton gateBypassBtn   { "ON" };
+    juce::TextButton distBypassBtn   { "ON" };
+    juce::TextButton phaserBypassBtn { "ON" };
+    juce::TextButton delayBypassBtn  { "ON" };
+    juce::TextButton preampBypassBtn { "ON" };
+    juce::TextButton reverbBypassBtn { "ON" };
+
     // Audio settings button
     juce::TextButton audioSettingsButton { ">>  AUDIO SETTINGS" };
+
+    // VU meter display
+    std::unique_ptr<VUMeterComponent> vuMeter;
 
     //==========================================================================
     // DSP — audio thread only
@@ -178,6 +191,18 @@ private:
     std::atomic<bool>  tunerActive    {false};
     std::atomic<float> pBackingVolume {0.80f};
     std::atomic<bool>  btLoop         {false};
+
+    // Effect bypass flags — toggled by buttons, read by audio thread
+    std::atomic<bool>  gateBypass     {false};
+    std::atomic<bool>  distBypass     {false};
+    std::atomic<bool>  phaserBypass   {false};
+    std::atomic<bool>  delayBypass    {false};
+    std::atomic<bool>  preampBypass   {false};
+    std::atomic<bool>  reverbBypass   {false};
+
+    // Peak level meters — written by audio thread, read by timer → VU display
+    std::atomic<float> vuPeakL        {0.0f};
+    std::atomic<float> vuPeakR        {0.0f};
 
     std::atomic<bool>  paramsChanged  {false};
     std::atomic<bool>  dspReady       {false};
