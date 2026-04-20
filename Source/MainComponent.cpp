@@ -23,13 +23,14 @@ static const juce::Colour kTunerAccentDim{ 0xff004455 };
 static const juce::Colour kBTAccent      { 0xff6600aa };   // dark purple
 static const juce::Colour kBTAccentDim   { 0xff440077 };
 
-// Legacy aliases kept so button-colour calls still compile
-static const juce::Colour kAmpAccent     { 0xff1a1a1a };   // title-bar text (white below)
-static const juce::Colour kGateAccent    = kLabelText;
-static const juce::Colour kDistAccent    = kLabelText;
-static const juce::Colour kPhaseAccent   = kLabelText;
-static const juce::Colour kDelayAccent   = kLabelText;
-static const juce::Colour kRevAccent     = kLabelText;
+// Section ID colours — visually identical on the panel but each has a unique
+// ARGB value so the name+colour disambiguation in setupKnob works correctly.
+static const juce::Colour kAmpAccent     { 0xff1a1a1a };
+static const juce::Colour kGateAccent    { 0xff1a1a10 };
+static const juce::Colour kDistAccent    { 0xff1a1a11 };
+static const juce::Colour kPhaseAccent   { 0xff1a1a12 };
+static const juce::Colour kDelayAccent   { 0xff1a1a13 };
+static const juce::Colour kRevAccent     { 0xff1a1a14 };
 
 //==============================================================================
 // Chrome / brushed-metal knob — single LAF used for every knob
@@ -301,6 +302,116 @@ private:
 };
 
 //==============================================================================
+// TunerNeedleComponent — analogue VU-needle showing cents sharp/flat
+//==============================================================================
+class TunerNeedleComponent : public juce::Component
+{
+public:
+    TunerNeedleComponent() = default;
+
+    /** Call from timer (message thread). +cents = sharp, -cents = flat. */
+    void setCents (float c, bool active)
+    {
+        cents  = juce::jlimit (-60.f, 60.f, c);
+        isActive = active;
+        repaint();
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        const float w  = (float)getWidth();
+        const float h  = (float)getHeight();
+        const float cx = w * 0.5f;
+        const float py = h * 0.92f;          // pivot near bottom
+        const float r  = h * 0.88f;          // needle length
+
+        // ── Background panel ─────────────────────────────────────────────────
+        g.setColour (juce::Colour (0xff080a12));
+        g.fillRoundedRectangle (0.f, 0.f, w, h, 4.f);
+        g.setColour (juce::Colour (0xff1c2540));
+        g.drawRoundedRectangle (0.5f, 0.5f, w-1.f, h-1.f, 4.f, 1.f);
+
+        // ── Colour arc zones (drawn as filled wedges) ─────────────────────────
+        // ±60 cents total span maps to ±108° (1.8 rad each side)
+        const float kSpan  = juce::MathConstants<float>::pi * 0.60f; // 108°
+        const float kScale = kSpan / 60.f;
+
+        auto arcPath = [&](float fromCents, float toCents, juce::Colour col)
+        {
+            juce::Path p;
+            float a1 = -juce::MathConstants<float>::halfPi + fromCents * kScale;
+            float a2 = -juce::MathConstants<float>::halfPi + toCents  * kScale;
+            float inner = r * 0.55f, outer = r * 0.82f;
+            p.addArc (cx - outer, py - outer, outer*2.f, outer*2.f, a1, a2, true);
+            p.lineTo (cx + std::cos(a2)*inner, py + std::sin(a2)*inner);
+            p.addArc (cx - inner, py - inner, inner*2.f, inner*2.f, a2, a1, false);
+            p.closeSubPath();
+            g.setColour (col);
+            g.fillPath (p);
+        };
+
+        arcPath (-60.f, -20.f, juce::Colour (0xff3a1010));  // flat  — dark red
+        arcPath (-20.f,  -5.f, juce::Colour (0xff2a2a08));  // flat  — dark amber
+        arcPath (  -5.f,  5.f, juce::Colour (0xff083a10));  // in tune — dark green
+        arcPath (   5.f, 20.f, juce::Colour (0xff2a2a08));  // sharp — dark amber
+        arcPath (  20.f, 60.f, juce::Colour (0xff3a1010));  // sharp — dark red
+
+        // ── Scale tick marks ─────────────────────────────────────────────────
+        g.setFont (juce::Font (juce::Font::getDefaultMonospacedFontName(), 8.f,
+                               juce::Font::plain));
+        for (int tc : { -50, -30, -20, -10, 0, 10, 20, 30, 50 })
+        {
+            float a   = -juce::MathConstants<float>::halfPi + tc * kScale;
+            float tx1 = cx + std::cos(a) * r * 0.83f;
+            float ty1 = py + std::sin(a) * r * 0.83f;
+            float tx2 = cx + std::cos(a) * r * 0.92f;
+            float ty2 = py + std::sin(a) * r * 0.92f;
+            g.setColour (juce::Colour (0xff2a4060));
+            g.drawLine (tx1, ty1, tx2, ty2, tc == 0 ? 1.5f : 0.8f);
+        }
+        // Centre tick label
+        {
+            float a = -juce::MathConstants<float>::halfPi;
+            g.setColour (juce::Colour (0xff1a6030));
+            g.drawText ("0", (int)(cx - 8.f),
+                        (int)(py + std::sin(a)*r*0.94f - 6.f), 16, 12,
+                        juce::Justification::centred);
+        }
+
+        if (!isActive) return;
+
+        // ── Needle ────────────────────────────────────────────────────────────
+        float angle  = -juce::MathConstants<float>::halfPi + cents * kScale;
+        float nx     = cx + std::cos (angle) * r * 0.80f;
+        float ny     = py + std::sin (angle) * r * 0.80f;
+
+        // Shadow
+        g.setColour (juce::Colours::black.withAlpha (0.4f));
+        g.drawLine (cx + 1.f, py + 1.f, nx + 1.f, ny + 1.f, 2.f);
+
+        // Needle colour: green in tune, yellow/red when off
+        float absCents = std::abs (cents);
+        juce::Colour needleCol = absCents < 5.f  ? juce::Colour (0xff44ee66)
+                               : absCents < 20.f ? juce::Colour (0xffddcc22)
+                                                 : juce::Colour (0xffee4422);
+        g.setColour (needleCol);
+        g.drawLine (cx, py, nx, ny, 1.8f);
+
+        // Glow
+        g.setColour (needleCol.withAlpha (0.25f));
+        g.drawLine (cx, py, nx, ny, 4.0f);
+
+        // Pivot dot
+        g.setColour (juce::Colour (0xffc0c8d0));
+        g.fillEllipse (cx - 3.5f, py - 3.5f, 7.f, 7.f);
+    }
+
+private:
+    float cents    = 0.f;
+    bool  isActive = false;
+};
+
+//==============================================================================
 static juce::Font monoFont(float size, int style = juce::Font::plain)
 {
     return juce::Font(juce::Font::getDefaultMonospacedFontName(), size, style);
@@ -311,12 +422,14 @@ MainComponent::MainComponent()
 {
     formatManager.registerBasicFormats();
 
-    auto makeSectionLabel = [&](juce::Label& lbl, const juce::String& text, juce::Colour /*col*/)
+    auto makeSectionLabel = [&](juce::Label& lbl, const juce::String& text,
+                                juce::Colour col,
+                                juce::Justification just = juce::Justification::centredLeft)
     {
         lbl.setText(text, juce::dontSendNotification);
-        lbl.setFont(monoFont(11.0f, juce::Font::bold));
-        lbl.setColour(juce::Label::textColourId, kLabelDim);
-        lbl.setJustificationType(juce::Justification::centredLeft);
+        lbl.setFont(monoFont(13.0f, juce::Font::bold));
+        lbl.setColour(juce::Label::textColourId, col);
+        lbl.setJustificationType(just);
         addAndMakeVisible(lbl);
     };
 
@@ -325,50 +438,51 @@ MainComponent::MainComponent()
     setupKnob(gateAttackKnob,  gateAttackLabel,  gateAttackValLabel,  "ATTACK",    0.20, kGateAccent);
     setupKnob(gateReleaseKnob, gateReleaseLabel, gateReleaseValLabel, "RELEASE",   0.50, kGateAccent);
     setupKnob(gateHoldKnob,    gateHoldLabel,    gateHoldValLabel,    "HOLD",      0.30, kGateAccent);
-    makeSectionLabel(gateSectionLabel, ">>  NOISE GATE", kLabelDim);
+    makeSectionLabel(gateSectionLabel, "  NOISE GATE", kLabelText);
 
     // ---- Distortion ---------------------------------------------------------
     setupKnob(driveKnob,     driveLabel,     driveValLabel,     "DRIVE", 0.50, kDistAccent);
     setupKnob(toneKnob,      toneLabel,      toneValLabel,      "TONE",  0.50, kDistAccent);
     setupKnob(tightKnob,     tightLabel,     tightValLabel,     "TIGHT", 0.30, kDistAccent);
     setupKnob(distLevelKnob, distLevelLabel, distLevelValLabel, "LEVEL", 0.70, kDistAccent);
-    makeSectionLabel(distSectionLabel, ">>  POWER METAL DISTORTION", kLabelDim);
+    makeSectionLabel(distSectionLabel, "  POWER METAL DISTORTION", kLabelText);
 
     // ---- Phaser -------------------------------------------------------------
     setupKnob(phaserRateKnob,     phaserRateLabel,     phaserRateValLabel,     "RATE",     0.30, kPhaseAccent);
     setupKnob(phaserDepthKnob,    phaserDepthLabel,    phaserDepthValLabel,    "DEPTH",    0.70, kPhaseAccent);
     setupKnob(phaserFeedbackKnob, phaserFeedbackLabel, phaserFeedbackValLabel, "FEEDBACK", 0.40, kPhaseAccent);
     setupKnob(phaserMixKnob,      phaserMixLabel,      phaserMixValLabel,      "MIX",      0.50, kPhaseAccent);
-    makeSectionLabel(phaserSectionLabel, ">>  PHASER", kLabelDim);
+    makeSectionLabel(phaserSectionLabel, "  PHASER", kLabelText);
 
     // ---- Tape Delay ---------------------------------------------------------
     setupKnob(delayTimeKnob,     delayTimeLabel,     delayTimeValLabel,     "TIME",     0.35, kDelayAccent);
     setupKnob(delayFeedbackKnob, delayFeedbackLabel, delayFeedbackValLabel, "FEEDBACK", 0.40, kDelayAccent);
     setupKnob(delayMixKnob,      delayMixLabel,      delayMixValLabel,      "MIX",      0.30, kDelayAccent);
     setupKnob(delayWowKnob,      delayWowLabel,      delayWowValLabel,      "WOW",      0.25, kDelayAccent);
-    makeSectionLabel(delaySectionLabel, ">>  TAPE ECHO", kLabelDim);
+    makeSectionLabel(delaySectionLabel, "  DELAY", kLabelText);
 
     // ---- Amp preamp ---------------------------------------------------------
     setupKnob(gainKnob,   gainLabel,   gainValLabel,   "GAIN",   0.50, kAmpAccent);
     setupKnob(bassKnob,   bassLabel,   bassValLabel,   "BASS",   0.50, kAmpAccent);
     setupKnob(midKnob,    midLabel,    midValLabel,    "MID",    0.50, kAmpAccent);
     setupKnob(trebleKnob, trebleLabel, trebleValLabel, "TREBLE", 0.50, kAmpAccent);
-    makeSectionLabel(preampSectionLabel, ">>  PREAMP", kLabelDim);
+    makeSectionLabel(preampSectionLabel, "PREAMP", kLabelText,
+                     juce::Justification::centred);
 
     // ---- Amp power ----------------------------------------------------------
     setupKnob(presenceKnob, presenceLabel, presenceValLabel, "PRESENCE", 0.50, kAmpAccent);
     setupKnob(masterKnob,   masterLabel,   masterValLabel,   "MASTER",   0.80, kAmpAccent);
-    makeSectionLabel(powerAmpSectionLabel, ">>  POWER AMP", kLabelDim);
+    makeSectionLabel(powerAmpSectionLabel, "  POWER AMP", kLabelText);
 
     // ---- Reverb -------------------------------------------------------------
     setupKnob(reverbMixKnob,   reverbMixLabel,   reverbMixValLabel,   "MIX",   0.25, kRevAccent);
     setupKnob(reverbSizeKnob,  reverbSizeLabel,  reverbSizeValLabel,  "SIZE",  0.50, kRevAccent);
     setupKnob(reverbDampKnob,  reverbDampLabel,  reverbDampValLabel,  "DAMP",  0.50, kRevAccent);
     setupKnob(reverbWidthKnob, reverbWidthLabel, reverbWidthValLabel, "WIDTH", 1.00, kRevAccent);
-    makeSectionLabel(reverbSectionLabel, ">>  REVERB", kLabelDim);
+    makeSectionLabel(reverbSectionLabel, "  REVERB", kLabelText);
 
     // ---- Cab Sim ------------------------------------------------------------
-    makeSectionLabel(cabSectionLabel, ">>  CAB SIM", kLabelDim);
+    makeSectionLabel(cabSectionLabel, "  CAB SIM", kLabelText);
 
     cabOnButton.setClickingTogglesState(true);
     cabOnButton.setColour(juce::TextButton::buttonColourId,   juce::Colour(0xff909090));
@@ -441,7 +555,7 @@ MainComponent::MainComponent()
     addAndMakeVisible(cabFileLabel);
 
     // ---- Tuner --------------------------------------------------------------
-    makeSectionLabel(tunerSectionLabel, ">>  CHROMATIC TUNER", kTunerAccentDim);
+    makeSectionLabel(tunerSectionLabel, "  CHROMATIC TUNER", kTunerAccent);
 
     tunerOnButton.setColour(juce::TextButton::buttonColourId,   juce::Colour(0xff909090));
     tunerOnButton.setColour(juce::TextButton::textColourOffId,  kLabelText);
@@ -467,12 +581,15 @@ MainComponent::MainComponent()
     tunerNoteLabel.setText  ("--",  juce::dontSendNotification);
     tunerCentsLabel.setText ("",    juce::dontSendNotification);
     tunerFreqLabel.setText  ("",    juce::dontSendNotification);
-    styleLabel(tunerNoteLabel,  40.0f, juce::Font::bold,  kTunerAccent);   // stays teal
-    styleLabel(tunerCentsLabel, 14.0f, juce::Font::plain, kValueText);
-    styleLabel(tunerFreqLabel,  11.0f, juce::Font::plain, kValueText);    // dark on silver
+    styleLabel(tunerNoteLabel,  36.0f, juce::Font::bold,  kTunerAccent);
+    styleLabel(tunerCentsLabel, 13.0f, juce::Font::plain, kValueText);
+    styleLabel(tunerFreqLabel,  10.0f, juce::Font::plain, kValueText);
+
+    tunerNeedle = std::make_unique<TunerNeedleComponent>();
+    addAndMakeVisible(*tunerNeedle);
 
     // ---- Backing Track ------------------------------------------------------
-    makeSectionLabel(btSectionLabel, ">>  BACKING TRACK", kBTAccentDim);
+    makeSectionLabel(btSectionLabel, "  BACKING TRACK", kBTAccent);
 
     auto styleBtn = [&](juce::TextButton& btn, juce::Colour bg, juce::Colour fg)
     {
@@ -564,6 +681,20 @@ MainComponent::MainComponent()
     btVolumeValLabel.setText("80%", juce::dontSendNotification);
     styleLabel(btVolumeValLabel, 11.0f, juce::Font::plain, kValueText);
 
+    // Pitch (varispeed) knob — -12 to +12 semitones
+    btPitchKnob.setLookAndFeel(&gMetalKnobLAF);
+    btPitchKnob.setSliderStyle(juce::Slider::RotaryVerticalDrag);
+    btPitchKnob.setRange(-12.0, 12.0);
+    btPitchKnob.setValue(0.0, juce::dontSendNotification);
+    btPitchKnob.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    btPitchKnob.onValueChange = [this] { pBtPitch = (float)btPitchKnob.getValue(); };
+    addAndMakeVisible(btPitchKnob);
+
+    btPitchLabel.setText("PITCH", juce::dontSendNotification);
+    styleLabel(btPitchLabel,    12.0f, juce::Font::bold,  kLabelText);
+    btPitchValLabel.setText("0 st", juce::dontSendNotification);
+    styleLabel(btPitchValLabel, 11.0f, juce::Font::plain, kValueText);
+
     btFileLabel.setText("No file loaded", juce::dontSendNotification);
     styleLabel(btFileLabel, 11.0f, juce::Font::plain, kValueText,
                juce::Justification::centredLeft);
@@ -621,8 +752,92 @@ MainComponent::MainComponent()
     vuMeter = std::make_unique<VUMeterComponent>();
     addAndMakeVisible(*vuMeter);
 
+    // ---- Preset toolbar -----------------------------------------------------
+    auto stylePresetBtn = [&](juce::TextButton& btn)
+    {
+        btn.setColour (juce::TextButton::buttonColourId,  juce::Colour (0xff303030));
+        btn.setColour (juce::TextButton::textColourOffId, juce::Colour (0xff72b8e8));
+        btn.setMouseCursor (juce::MouseCursor::PointingHandCursor);
+        addAndMakeVisible (btn);
+    };
+    stylePresetBtn (presetSaveBtn);
+    stylePresetBtn (presetLoadBtn);
+    stylePresetBtn (presetResetBtn);
+
+    autoSaveBtn.setClickingTogglesState (true);
+    autoSaveBtn.setColour (juce::TextButton::buttonColourId,   juce::Colour (0xff303030));
+    autoSaveBtn.setColour (juce::TextButton::textColourOffId,  juce::Colour (0xff555555));
+    autoSaveBtn.setColour (juce::TextButton::buttonOnColourId, juce::Colour (0xff202020));
+    autoSaveBtn.setColour (juce::TextButton::textColourOnId,   juce::Colour (0xff1a7acc));
+    autoSaveBtn.setMouseCursor (juce::MouseCursor::PointingHandCursor);
+    autoSaveBtn.onClick = [this]
+    {
+        autoSaveEnabled = autoSaveBtn.getToggleState();
+        autoSaveBtn.setButtonText (autoSaveEnabled ? "AUTO: ON" : "AUTO: OFF");
+    };
+    addAndMakeVisible (autoSaveBtn);
+
+    presetNameLabel.setText ("No preset loaded", juce::dontSendNotification);
+    presetNameLabel.setFont (monoFont (10.0f));
+    presetNameLabel.setColour (juce::Label::textColourId, juce::Colour (0xff3a6080));
+    presetNameLabel.setJustificationType (juce::Justification::centredLeft);
+    addAndMakeVisible (presetNameLabel);
+
+    presetSaveBtn.onClick = [this]
+    {
+        auto chooser = std::make_shared<juce::FileChooser> (
+            "Save Preset",
+            lastPresetFile.existsAsFile()
+                ? lastPresetFile
+                : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+                      .getChildFile("BlueSteel Presets"),
+            "*.json");
+        chooser->launchAsync (
+            juce::FileBrowserComponent::saveMode |
+            juce::FileBrowserComponent::canSelectFiles |
+            juce::FileBrowserComponent::warnAboutOverwriting,
+            [this, chooser](const juce::FileChooser& fc)
+            {
+                auto f = fc.getResult();
+                if (f == juce::File{}) return;
+                auto out = f.withFileExtension ("json");
+                savePreset (out);
+                lastPresetFile = out;
+                juce::MessageManager::callAsync ([this, name = out.getFileNameWithoutExtension()]
+                {
+                    presetNameLabel.setText (name, juce::dontSendNotification);
+                });
+            });
+    };
+
+    presetLoadBtn.onClick = [this]
+    {
+        auto chooser = std::make_shared<juce::FileChooser> (
+            "Load Preset",
+            lastPresetFile.existsAsFile()
+                ? lastPresetFile.getParentDirectory()
+                : juce::File::getSpecialLocation(juce::File::userDocumentsDirectory),
+            "*.json");
+        chooser->launchAsync (
+            juce::FileBrowserComponent::openMode |
+            juce::FileBrowserComponent::canSelectFiles,
+            [this, chooser](const juce::FileChooser& fc)
+            {
+                auto f = fc.getResult();
+                if (!f.existsAsFile()) return;
+                loadPreset (f);
+                lastPresetFile = f;
+                juce::MessageManager::callAsync ([this, name = f.getFileNameWithoutExtension()]
+                {
+                    presetNameLabel.setText (name, juce::dontSendNotification);
+                });
+            });
+    };
+
+    presetResetBtn.onClick = [this] { applyDefaults(); };
+
     startTimer(66);   // 15 fps value-label refresh
-    setSize(1000, 940);
+    setSize(1000, 970);  // +30 px for preset toolbar
     setAudioChannels(1, 2);
 }
 
@@ -770,7 +985,7 @@ void MainComponent::timerCallback()
     for (auto& p : pairs)
         p.l->setText(formatValue(p.n, p.k->getValue()), juce::dontSendNotification);
 
-    // ---- Tuner display ------------------------------------------------------
+    // ---- Tuner display + needle ---------------------------------------------
     if (tunerActive.load())
     {
         float freq = 0.0f;
@@ -778,23 +993,24 @@ void MainComponent::timerCallback()
         float cents = 0.0f;
         if (pitchDetector.analyze(freq, note, cents))
         {
+            tunerCentsRaw.store (cents, std::memory_order_relaxed);
             juce::String noteStr = juce::String(PitchDetector::noteName(note))
                                    + juce::String(PitchDetector::noteOctave(note));
             tunerNoteLabel.setText(noteStr, juce::dontSendNotification);
 
             juce::String cStr = (cents >= 0 ? "+" : "")
-                                + juce::String((int)std::round(cents)) + " cents";
+                                + juce::String((int)std::round(cents)) + " ¢";
             tunerCentsLabel.setText(cStr, juce::dontSendNotification);
             tunerFreqLabel.setText(juce::String(freq, 1) + " Hz",
                                    juce::dontSendNotification);
 
-            // Colour the note green when in tune (within ±8 cents), amber otherwise
             bool inTune = std::abs(cents) < 8.0f;
             tunerNoteLabel.setColour(juce::Label::textColourId,
-                                     inTune ? juce::Colour(0xff44ee44) : kTunerAccent);
+                                     inTune ? juce::Colour(0xff44ee66) : kTunerAccent);
             tunerCentsLabel.setColour(juce::Label::textColourId,
-                                      inTune ? juce::Colour(0xff44ee44) : kValueText);
+                                      inTune ? juce::Colour(0xff44ee66) : kValueText);
         }
+        if (tunerNeedle) tunerNeedle->setCents (tunerCentsRaw.load(), true);
     }
     else
     {
@@ -802,6 +1018,7 @@ void MainComponent::timerCallback()
         tunerNoteLabel.setColour(juce::Label::textColourId, kTunerAccent);
         tunerCentsLabel.setText("", juce::dontSendNotification);
         tunerFreqLabel.setText("",  juce::dontSendNotification);
+        if (tunerNeedle) tunerNeedle->setCents (0.f, false);
     }
 
     // ---- Cab sim blend readout ----------------------------------------------
@@ -814,6 +1031,23 @@ void MainComponent::timerCallback()
     btVolumeValLabel.setText(
         juce::String((int)(btVolumeKnob.getValue() * 100.0)) + "%",
         juce::dontSendNotification);
+    {
+        int st = (int)std::round (btPitchKnob.getValue());
+        juce::String ps = st == 0 ? "0 st"
+                        : (st > 0 ? "+" : "") + juce::String(st) + " st";
+        btPitchValLabel.setText (ps, juce::dontSendNotification);
+    }
+
+    // ---- Auto-save countdown ------------------------------------------------
+    if (autoSaveEnabled && autoSaveCooldown > 0)
+    {
+        if (--autoSaveCooldown == 0)
+        {
+            auto f = juce::File::getSpecialLocation (juce::File::currentExecutableFile)
+                         .getSiblingFile ("autosave.json");
+            savePreset (f);
+        }
+    }
 
     // ---- VU meter -----------------------------------------------------------
     if (vuMeter != nullptr && dspReady.load (std::memory_order_relaxed))
@@ -832,7 +1066,7 @@ void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate
 {
     pitchDetector.setSampleRate(sampleRate);
     cabSim.prepare(sampleRate, samplesPerBlockExpected);
-    transportSource.prepareToPlay(samplesPerBlockExpected, sampleRate);
+    btResampler.prepareToPlay(samplesPerBlockExpected, sampleRate);  // cascades to transportSource
     backingBuffer.setSize(2, samplesPerBlockExpected + 512, false, true, false);
 
     noiseGate.prepare(sampleRate);
@@ -924,10 +1158,14 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& info)
     const bool btPlaying = transportSource.isPlaying();
     if (btPlaying)
     {
+        // Apply pitch/speed via resampler (ratio = 2^(semitones/12))
+        double ratio = std::pow (2.0, (double)pBtPitch.load (std::memory_order_relaxed) / 12.0);
+        btResampler.setResamplingRatio (ratio);
+
         const int nBT = std::min(info.numSamples, backingBuffer.getNumSamples());
         backingBuffer.clear(0, nBT);
         juce::AudioSourceChannelInfo btInfo(&backingBuffer, 0, nBT);
-        transportSource.getNextAudioBlock(btInfo);
+        btResampler.getNextAudioBlock(btInfo);
     }
     const float btVol      = pBackingVolume.load(std::memory_order_relaxed);
     const bool  tunerOn    = tunerActive.load(std::memory_order_relaxed);
@@ -1002,8 +1240,152 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& info)
 
 void MainComponent::releaseResources()
 {
-    transportSource.releaseResources();
+    btResampler.releaseResources();
     dspReady = false;
+}
+
+//==============================================================================
+// Preset save / load / reset
+//==============================================================================
+void MainComponent::savePreset (const juce::File& file)
+{
+    juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+    obj->setProperty ("version",       1);
+    obj->setProperty ("gateThresh",    (double)pGateThresh.load());
+    obj->setProperty ("gateAttack",    (double)pGateAttack.load());
+    obj->setProperty ("gateRelease",   (double)pGateRelease.load());
+    obj->setProperty ("gateHold",      (double)pGateHold.load());
+    obj->setProperty ("drive",         (double)pDrive.load());
+    obj->setProperty ("tone",          (double)pTone.load());
+    obj->setProperty ("tight",         (double)pTight.load());
+    obj->setProperty ("distLevel",     (double)pDistLevel.load());
+    obj->setProperty ("phaserRate",    (double)pPhaserRate.load());
+    obj->setProperty ("phaserDepth",   (double)pPhaserDepth.load());
+    obj->setProperty ("phaserFeedback",(double)pPhaserFeedback.load());
+    obj->setProperty ("phaserMix",     (double)pPhaserMix.load());
+    obj->setProperty ("delayTime",     (double)pDelayTime.load());
+    obj->setProperty ("delayFeedback", (double)pDelayFeedback.load());
+    obj->setProperty ("delayMix",      (double)pDelayMix.load());
+    obj->setProperty ("delayWow",      (double)pDelayWow.load());
+    obj->setProperty ("gain",          (double)pGain.load());
+    obj->setProperty ("bass",          (double)pBass.load());
+    obj->setProperty ("mid",           (double)pMid.load());
+    obj->setProperty ("treble",        (double)pTreble.load());
+    obj->setProperty ("presence",      (double)pPresence.load());
+    obj->setProperty ("master",        (double)pMaster.load());
+    obj->setProperty ("reverbMix",     (double)pReverbMix.load());
+    obj->setProperty ("reverbSize",    (double)pReverbSize.load());
+    obj->setProperty ("reverbDamp",    (double)pReverbDamp.load());
+    obj->setProperty ("reverbWidth",   (double)pReverbWidth.load());
+    obj->setProperty ("cabActive",     cabActive.load());
+    obj->setProperty ("cabBlend",      (double)pCabBlend.load());
+    obj->setProperty ("gateBypass",    gateBypass.load());
+    obj->setProperty ("distBypass",    distBypass.load());
+    obj->setProperty ("phaserBypass",  phaserBypass.load());
+    obj->setProperty ("delayBypass",   delayBypass.load());
+    obj->setProperty ("preampBypass",  preampBypass.load());
+    obj->setProperty ("reverbBypass",  reverbBypass.load());
+    obj->setProperty ("btVolume",      (double)pBackingVolume.load());
+    obj->setProperty ("btPitch",       (double)pBtPitch.load());
+
+    file.getParentDirectory().createDirectory();
+    file.replaceWithText (juce::JSON::toString (juce::var (obj.get()), true));
+}
+
+void MainComponent::loadPreset (const juce::File& file)
+{
+    auto json = juce::JSON::parse (file.loadFileAsString());
+    if (!json.isObject()) return;
+
+    auto gd = [&](const char* k, double def) -> double
+        { return (double)json.getProperty (k, def); };
+    auto gb = [&](const char* k, bool def) -> bool
+        { return (bool)json.getProperty (k, def); };
+
+    gateThreshKnob   .setValue (gd("gateThresh",    0.30), juce::sendNotification);
+    gateAttackKnob   .setValue (gd("gateAttack",    0.20), juce::sendNotification);
+    gateReleaseKnob  .setValue (gd("gateRelease",   0.50), juce::sendNotification);
+    gateHoldKnob     .setValue (gd("gateHold",      0.30), juce::sendNotification);
+    driveKnob        .setValue (gd("drive",         0.50), juce::sendNotification);
+    toneKnob         .setValue (gd("tone",          0.50), juce::sendNotification);
+    tightKnob        .setValue (gd("tight",         0.30), juce::sendNotification);
+    distLevelKnob    .setValue (gd("distLevel",     0.70), juce::sendNotification);
+    phaserRateKnob   .setValue (gd("phaserRate",    0.30), juce::sendNotification);
+    phaserDepthKnob  .setValue (gd("phaserDepth",   0.70), juce::sendNotification);
+    phaserFeedbackKnob.setValue(gd("phaserFeedback",0.40), juce::sendNotification);
+    phaserMixKnob    .setValue (gd("phaserMix",     0.50), juce::sendNotification);
+    delayTimeKnob    .setValue (gd("delayTime",     0.35), juce::sendNotification);
+    delayFeedbackKnob.setValue (gd("delayFeedback", 0.40), juce::sendNotification);
+    delayMixKnob     .setValue (gd("delayMix",      0.30), juce::sendNotification);
+    delayWowKnob     .setValue (gd("delayWow",      0.25), juce::sendNotification);
+    gainKnob         .setValue (gd("gain",          0.50), juce::sendNotification);
+    bassKnob         .setValue (gd("bass",          0.50), juce::sendNotification);
+    midKnob          .setValue (gd("mid",           0.50), juce::sendNotification);
+    trebleKnob       .setValue (gd("treble",        0.50), juce::sendNotification);
+    presenceKnob     .setValue (gd("presence",      0.50), juce::sendNotification);
+    masterKnob       .setValue (gd("master",        0.80), juce::sendNotification);
+    reverbMixKnob    .setValue (gd("reverbMix",     0.25), juce::sendNotification);
+    reverbSizeKnob   .setValue (gd("reverbSize",    0.50), juce::sendNotification);
+    reverbDampKnob   .setValue (gd("reverbDamp",    0.50), juce::sendNotification);
+    reverbWidthKnob  .setValue (gd("reverbWidth",   1.00), juce::sendNotification);
+    cabBlendKnob     .setValue (gd("cabBlend",      1.00), juce::sendNotification);
+    btVolumeKnob     .setValue (gd("btVolume",      0.80), juce::sendNotification);
+    btPitchKnob      .setValue (gd("btPitch",       0.00), juce::sendNotification);
+
+    // Bypass button states
+    auto applyBypass = [](juce::TextButton& btn, std::atomic<bool>& flag, bool val)
+    {
+        btn.setToggleState (val, juce::dontSendNotification);
+        flag = val;
+        btn.setButtonText (val ? "BYP" : "ON");
+    };
+    applyBypass (gateBypassBtn,   gateBypass,   gb("gateBypass",   false));
+    applyBypass (distBypassBtn,   distBypass,   gb("distBypass",   false));
+    applyBypass (phaserBypassBtn, phaserBypass, gb("phaserBypass", false));
+    applyBypass (delayBypassBtn,  delayBypass,  gb("delayBypass",  false));
+    applyBypass (preampBypassBtn, preampBypass, gb("preampBypass", false));
+    applyBypass (reverbBypassBtn, reverbBypass, gb("reverbBypass", false));
+
+    bool cab = gb("cabActive", false);
+    cabActive = cab;
+    cabOnButton.setToggleState (cab, juce::dontSendNotification);
+    cabOnButton.setButtonText  (cab ? "CAB: ON" : "CAB: OFF");
+    paramsChanged = true;
+}
+
+void MainComponent::applyDefaults()
+{
+    loadPreset (juce::File{});   // pass invalid file to trigger default-value path
+    // Since invalid file returns early, we set defaults manually:
+    gateThreshKnob   .setValue (0.30, juce::sendNotification);
+    gateAttackKnob   .setValue (0.20, juce::sendNotification);
+    gateReleaseKnob  .setValue (0.50, juce::sendNotification);
+    gateHoldKnob     .setValue (0.30, juce::sendNotification);
+    driveKnob        .setValue (0.50, juce::sendNotification);
+    toneKnob         .setValue (0.50, juce::sendNotification);
+    tightKnob        .setValue (0.30, juce::sendNotification);
+    distLevelKnob    .setValue (0.70, juce::sendNotification);
+    phaserRateKnob   .setValue (0.30, juce::sendNotification);
+    phaserDepthKnob  .setValue (0.70, juce::sendNotification);
+    phaserFeedbackKnob.setValue(0.40, juce::sendNotification);
+    phaserMixKnob    .setValue (0.50, juce::sendNotification);
+    delayTimeKnob    .setValue (0.35, juce::sendNotification);
+    delayFeedbackKnob.setValue (0.40, juce::sendNotification);
+    delayMixKnob     .setValue (0.30, juce::sendNotification);
+    delayWowKnob     .setValue (0.25, juce::sendNotification);
+    gainKnob         .setValue (0.50, juce::sendNotification);
+    bassKnob         .setValue (0.50, juce::sendNotification);
+    midKnob          .setValue (0.50, juce::sendNotification);
+    trebleKnob       .setValue (0.50, juce::sendNotification);
+    presenceKnob     .setValue (0.50, juce::sendNotification);
+    masterKnob       .setValue (0.80, juce::sendNotification);
+    reverbMixKnob    .setValue (0.25, juce::sendNotification);
+    reverbSizeKnob   .setValue (0.50, juce::sendNotification);
+    reverbDampKnob   .setValue (0.50, juce::sendNotification);
+    reverbWidthKnob  .setValue (1.00, juce::sendNotification);
+    btPitchKnob      .setValue (0.00, juce::sendNotification);
+    presetNameLabel.setText ("Defaults", juce::dontSendNotification);
+    paramsChanged = true;
 }
 
 //==============================================================================
@@ -1011,15 +1393,16 @@ void MainComponent::paint(juce::Graphics& g)
 {
     g.fillAll(kBackground);
 
-    const int m         = 6;
-    const int rowH      = 140;
-    const int titleBarH = 68;
+    const int m          = 6;
+    const int rowH       = 140;
+    const int titleBarH  = 68;
+    const int presetBarH = 30;
 
-    const int row1Y = titleBarH;
-    const int row2Y = titleBarH + (rowH + m);
-    const int row3Y = titleBarH + (rowH + m) * 2;
-    const int row4Y = titleBarH + (rowH + m) * 3;
-    const int row5Y = titleBarH + (rowH + m) * 4;
+    const int row1Y = titleBarH + presetBarH;
+    const int row2Y = titleBarH + presetBarH + (rowH + m);
+    const int row3Y = titleBarH + presetBarH + (rowH + m) * 2;
+    const int row4Y = titleBarH + presetBarH + (rowH + m) * 3;
+    const int row5Y = titleBarH + presetBarH + (rowH + m) * 4;
 
     const int preampEndX = (int)(getWidth() * 0.39f);
     const int powerEndX  = (int)(getWidth() * 0.53f);
@@ -1058,7 +1441,20 @@ void MainComponent::paint(juce::Graphics& g)
         }
     }
 
-    const int row6Y     = titleBarH + (rowH + m) * 5;
+    // ---- Preset toolbar strip — slim dark bar below title bar ------------------
+    {
+        const int py = titleBarH;
+        const int ph = presetBarH;
+        juce::ColourGradient pg (juce::Colour (0xff14161e), 0, (float)py,
+                                 juce::Colour (0xff0c0e14), 0, (float)(py + ph), false);
+        g.setGradientFill (pg);
+        g.fillRect (0, py, getWidth(), ph);
+        // Bottom separator
+        g.setColour (juce::Colour (0xff1c2a40).withAlpha (0.5f));
+        g.drawHorizontalLine (py + ph - 1, 0.0f, (float)getWidth());
+    }
+
+    const int row6Y     = titleBarH + presetBarH + (rowH + m) * 5;
     const int tunerEndX = (int)(getWidth() * 0.38f);
 
     // ---- Brushed-metal panel painter ----------------------------------------
@@ -1120,19 +1516,20 @@ void MainComponent::paint(juce::Graphics& g)
 
 void MainComponent::resized()
 {
-    const int m         = 10;
-    const int titleBarH = 68;
-    const int rowH      = 140;
-    const int labelH    = 18;
-    const int valH      = 16;
-    const int secH      = 20;
-    const int pad       = 4;
+    const int m          = 10;
+    const int titleBarH  = 68;
+    const int presetBarH = 30;
+    const int rowH       = 140;
+    const int labelH     = 18;
+    const int valH       = 16;
+    const int secH       = 20;
+    const int pad        = 4;
 
-    const int row1Y = titleBarH + pad;
-    const int row2Y = titleBarH + (rowH + m) + pad;
-    const int row3Y = titleBarH + (rowH + m) * 2 + pad;
-    const int row4Y = titleBarH + (rowH + m) * 3 + pad;
-    const int row5Y = titleBarH + (rowH + m) * 4 + pad;
+    const int row1Y = titleBarH + presetBarH + pad;
+    const int row2Y = titleBarH + presetBarH + (rowH + m) + pad;
+    const int row3Y = titleBarH + presetBarH + (rowH + m) * 2 + pad;
+    const int row4Y = titleBarH + presetBarH + (rowH + m) * 3 + pad;
+    const int row5Y = titleBarH + presetBarH + (rowH + m) * 4 + pad;
 
     const int preampEndX = (int)(getWidth() * 0.39f);
     const int powerEndX  = (int)(getWidth() * 0.53f);
@@ -1149,6 +1546,21 @@ void MainComponent::resized()
         const int vuX = 70;   // just right of the logo icon
         const int vuW = (getWidth() - 200 - m - 8) - vuX;
         vuMeter->setBounds (vuX, 4, vuW, titleBarH - 8);
+    }
+
+    // Preset toolbar — sits in the strip between title bar and row 1
+    {
+        const int py  = titleBarH + 3;
+        const int ph  = presetBarH - 6;
+        const int bw  = 70;
+        const int gap = 4;
+        int bx = gap * 2;
+        presetSaveBtn .setBounds (bx, py, bw, ph);  bx += bw + gap;
+        presetLoadBtn .setBounds (bx, py, bw, ph);  bx += bw + gap;
+        presetResetBtn.setBounds (bx, py, bw, ph);  bx += bw + gap;
+        autoSaveBtn   .setBounds (bx, py, 90,  ph); bx += 90 + gap * 2;
+        // preset name label fills the rest of the strip
+        presetNameLabel.setBounds (bx, py, getWidth() - bx - gap * 2, ph);
     }
 
     auto placeKnob = [&](juce::Rectangle<int>& area, int w,
@@ -1207,11 +1619,11 @@ void MainComponent::resized()
             phaserFeedbackKnob,phaserFeedbackLabel,phaserFeedbackValLabel,
             phaserMixKnob,     phaserMixLabel,     phaserMixValLabel);
 
-    layout4(row4Y, delaySectionLabel,
+    layout4(row4Y, delaySectionLabel,       // MIX moved to col-4 to align with Phaser
             delayTimeKnob,     delayTimeLabel,     delayTimeValLabel,
             delayFeedbackKnob, delayFeedbackLabel, delayFeedbackValLabel,
-            delayMixKnob,      delayMixLabel,      delayMixValLabel,
-            delayWowKnob,      delayWowLabel,      delayWowValLabel);
+            delayWowKnob,      delayWowLabel,      delayWowValLabel,
+            delayMixKnob,      delayMixLabel,      delayMixValLabel);
 
     const int botH = rowH - pad * 2;
 
@@ -1260,34 +1672,39 @@ void MainComponent::resized()
         auto area = juce::Rectangle<int>(cabEndX + m, row5Y,
                                          getWidth() - cabEndX - m*2, botH);
         reverbSectionLabel.setBounds(area.removeFromTop(secH));
-        const int kw = area.getWidth() / 4;
-        placeKnob(area, kw, reverbMixKnob,   reverbMixLabel,   reverbMixValLabel);
+        const int kw = area.getWidth() / 4;  // MIX moved to far right (col-4)
         placeKnob(area, kw, reverbSizeKnob,  reverbSizeLabel,  reverbSizeValLabel);
         placeKnob(area, kw, reverbDampKnob,  reverbDampLabel,  reverbDampValLabel);
         placeKnob(area, kw, reverbWidthKnob, reverbWidthLabel, reverbWidthValLabel);
+        placeKnob(area, kw, reverbMixKnob,   reverbMixLabel,   reverbMixValLabel);
     }
 
     // ---- Row 6: Tuner + Backing Track ---------------------------------------
-    const int row6Y = titleBarH + (rowH + m) * 5 + pad;
+    const int row6Y = titleBarH + presetBarH + (rowH + m) * 5 + pad;
 
     // Tuner panel
     {
         auto area = juce::Rectangle<int>(m*2, row6Y, tunerEndX - m*3, rowH - pad*2);
         tunerSectionLabel.setBounds(area.removeFromTop(secH));
 
-        // ON/OFF button
-        auto btnRow = area.removeFromTop(30);
-        tunerOnButton.setBounds(btnRow.removeFromLeft(120));
+        // ON/OFF button — top-left
+        auto btnRow = area.removeFromTop(26);
+        tunerOnButton.setBounds(btnRow.removeFromLeft(100));
 
-        area.removeFromTop(4);
+        area.removeFromTop(2);
 
-        // Display: big note label on left, cents + freq stacked on right
-        auto dispL = area.removeFromLeft(area.getWidth() / 2);
-        tunerNoteLabel.setBounds(dispL);   // fills the left half, vertically centred by font
+        // Left column: note + freq labels
+        auto leftCol = area.removeFromLeft(area.getWidth() / 3);
+        tunerNoteLabel .setBounds(leftCol.removeFromTop(leftCol.getHeight() * 2 / 3));
+        tunerFreqLabel .setBounds(leftCol);
 
-        auto dispR = area;
-        tunerCentsLabel.setBounds(dispR.removeFromTop(dispR.getHeight() / 2));
-        tunerFreqLabel.setBounds(dispR);
+        // Centre: cents label (numeric)
+        auto centCol = area.removeFromLeft(area.getWidth() / 2);
+        tunerCentsLabel.setBounds(centCol);
+
+        // Right: graphical needle component
+        if (tunerNeedle != nullptr)
+            tunerNeedle->setBounds(area);
     }
 
     // Backing Track panel
@@ -1297,24 +1714,30 @@ void MainComponent::resized()
         btSectionLabel.setBounds(area.removeFromTop(secH));
 
         // Button row
-        auto btnRow = area.removeFromTop(30);
-        btLoadButton.setBounds(btnRow.removeFromLeft(80));
+        auto btnRow = area.removeFromTop(28);
+        btLoadButton.setBounds(btnRow.removeFromLeft(72));
         btnRow.removeFromLeft(4);
-        btPlayButton.setBounds(btnRow.removeFromLeft(80));
+        btPlayButton.setBounds(btnRow.removeFromLeft(72));
         btnRow.removeFromLeft(4);
-        btLoopButton.setBounds(btnRow.removeFromLeft(110));
+        btLoopButton.setBounds(btnRow.removeFromLeft(100));
 
         area.removeFromTop(4);
 
         // File name at bottom
         btFileLabel.setBounds(area.removeFromBottom(valH));
 
-        // Volume knob takes a fixed slice on the left of the remaining space
+        // Two knobs side by side: Volume | Pitch
         const int kw = 90;
         auto volCol = area.removeFromLeft(kw);
         btVolumeValLabel.setBounds(volCol.removeFromBottom(valH));
-        btVolumeLabel.setBounds(volCol.removeFromBottom(labelH));
-        btVolumeKnob.setBounds(volCol.reduced(pad, 2));
+        btVolumeLabel   .setBounds(volCol.removeFromBottom(labelH));
+        btVolumeKnob    .setBounds(volCol.reduced(pad, 2));
+
+        area.removeFromLeft(4);
+        auto pitchCol = area.removeFromLeft(kw);
+        btPitchValLabel.setBounds(pitchCol.removeFromBottom(valH));
+        btPitchLabel   .setBounds(pitchCol.removeFromBottom(labelH));
+        btPitchKnob    .setBounds(pitchCol.reduced(pad, 2));
     }
 
     juce::ignoreUnused(labelH, valH);

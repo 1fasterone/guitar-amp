@@ -97,10 +97,11 @@ private:
 
     // UI — chromatic tuner
     juce::TextButton tunerOnButton  { "TUNER: OFF" };
-    juce::Label      tunerNoteLabel;      // shows "E4", "A3", etc. (big font)
-    juce::Label      tunerCentsLabel;     // shows "+2 cents"
-    juce::Label      tunerFreqLabel;      // shows "329.6 Hz"
+    juce::Label      tunerNoteLabel;
+    juce::Label      tunerCentsLabel;
+    juce::Label      tunerFreqLabel;
     juce::Label      tunerSectionLabel;
+    std::unique_ptr<class TunerNeedleComponent> tunerNeedle;
 
     // UI — backing track player
     juce::TextButton btLoadButton { "LOAD" };
@@ -108,6 +109,8 @@ private:
     juce::TextButton btLoopButton { "LOOP: OFF" };
     juce::Slider     btVolumeKnob;
     juce::Label      btVolumeLabel, btVolumeValLabel;
+    juce::Slider     btPitchKnob;
+    juce::Label      btPitchLabel, btPitchValLabel;
     juce::Label      btFileLabel;
     juce::Label      btSectionLabel;
 
@@ -118,6 +121,20 @@ private:
     juce::TextButton delayBypassBtn  { "ON" };
     juce::TextButton preampBypassBtn { "ON" };
     juce::TextButton reverbBypassBtn { "ON" };
+
+    // Preset toolbar
+    juce::TextButton presetSaveBtn  { "SAVE" };
+    juce::TextButton presetLoadBtn  { "LOAD" };
+    juce::TextButton presetResetBtn { "RESET" };
+    juce::TextButton autoSaveBtn    { "AUTO: OFF" };
+    juce::Label      presetNameLabel;
+    juce::File       lastPresetFile;
+    bool             autoSaveEnabled  { false };
+    int              autoSaveCooldown { 0 };     // ticks until next auto-save
+
+    void savePreset (const juce::File&);
+    void loadPreset (const juce::File&);
+    void applyDefaults();
 
     // Audio settings button
     juce::TextButton audioSettingsButton { ">>  AUDIO SETTINGS" };
@@ -146,6 +163,7 @@ private:
     juce::AudioFormatManager                       formatManager;
     std::unique_ptr<juce::AudioFormatReaderSource> readerSource;
     juce::AudioTransportSource                     transportSource;
+    juce::ResamplingAudioSource                    btResampler { &transportSource, false, 2 };
     std::unique_ptr<juce::FileChooser>             fileChooser;
     juce::AudioBuffer<float>                       backingBuffer;
 
@@ -189,7 +207,9 @@ private:
 
     // Atomic params — tuner + backing track
     std::atomic<bool>  tunerActive    {false};
+    std::atomic<float> tunerCentsRaw  {0.0f};    // fed to TunerNeedleComponent
     std::atomic<float> pBackingVolume {0.80f};
+    std::atomic<float> pBtPitch       {0.0f};    // semitones -12..+12
     std::atomic<bool>  btLoop         {false};
 
     // Effect bypass flags — toggled by buttons, read by audio thread
