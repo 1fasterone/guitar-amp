@@ -30,6 +30,7 @@ static const juce::Colour kGateAccent    { 0xff1a1a10 };
 static const juce::Colour kDistAccent    { 0xff1a1a11 };
 static const juce::Colour kPhaseAccent   { 0xff1a1a12 };
 static const juce::Colour kDelayAccent   { 0xff1a1a13 };
+static const juce::Colour kWahAccent     { 0xff1a1a15 };
 static const juce::Colour kRevAccent     { 0xff1a1a14 };
 
 //==============================================================================
@@ -454,6 +455,13 @@ MainComponent::MainComponent()
     setupKnob(phaserMixKnob,      phaserMixLabel,      phaserMixValLabel,      "MIX",      0.50, kPhaseAccent);
     makeSectionLabel(phaserSectionLabel, "  PHASER", kLabelText);
 
+    // ---- Wah Wah ------------------------------------------------------------
+    setupKnob(wahFreqKnob, wahFreqLabel, wahFreqValLabel, "FREQ", 0.35, kWahAccent);
+    setupKnob(wahQKnob,    wahQLabel,    wahQValLabel,    "Q",    0.40, kWahAccent);
+    setupKnob(wahSensKnob, wahSensLabel, wahSensValLabel, "SENS", 0.60, kWahAccent);
+    setupKnob(wahMixKnob,  wahMixLabel,  wahMixValLabel,  "MIX",  0.70, kWahAccent);
+    makeSectionLabel(wahSectionLabel, "  WAH WAH", kLabelText);
+
     // ---- Tape Delay ---------------------------------------------------------
     setupKnob(delayTimeKnob,     delayTimeLabel,     delayTimeValLabel,     "TIME",     0.35, kDelayAccent);
     setupKnob(delayFeedbackKnob, delayFeedbackLabel, delayFeedbackValLabel, "FEEDBACK", 0.40, kDelayAccent);
@@ -744,6 +752,7 @@ MainComponent::MainComponent()
     setupBypass (gateBypassBtn,   gateBypass);
     setupBypass (distBypassBtn,   distBypass);
     setupBypass (phaserBypassBtn, phaserBypass);
+    setupBypass (wahBypassBtn,    wahBypass);
     setupBypass (delayBypassBtn,  delayBypass);
     setupBypass (preampBypassBtn, preampBypass);
     setupBypass (reverbBypassBtn, reverbBypass);
@@ -873,6 +882,11 @@ void MainComponent::setupKnob(juce::Slider& knob, juce::Label& nameLabel,
     else if (name == "DEPTH")     knob.onValueChange = [this] { pPhaserDepth   = (float)phaserDepthKnob.getValue();    paramsChanged = true; };
     else if (name == "FEEDBACK" && accentColour == kPhaseAccent)
                                   knob.onValueChange = [this] { pPhaserFeedback= (float)phaserFeedbackKnob.getValue(); paramsChanged = true; };
+    else if (name == "FREQ")      knob.onValueChange = [this] { pWahFreq       = (float)wahFreqKnob.getValue();        paramsChanged = true; };
+    else if (name == "Q")         knob.onValueChange = [this] { pWahQ          = (float)wahQKnob.getValue();           paramsChanged = true; };
+    else if (name == "SENS")      knob.onValueChange = [this] { pWahSens       = (float)wahSensKnob.getValue();        paramsChanged = true; };
+    else if (name == "MIX" && accentColour == kWahAccent)
+                                  knob.onValueChange = [this] { pWahMix        = (float)wahMixKnob.getValue();         paramsChanged = true; };
     else if (name == "MIX" && accentColour == kPhaseAccent)
                                   knob.onValueChange = [this] { pPhaserMix     = (float)phaserMixKnob.getValue();      paramsChanged = true; };
     else if (name == "TIME")      knob.onValueChange = [this] { pDelayTime     = (float)delayTimeKnob.getValue();      paramsChanged = true; };
@@ -937,6 +951,19 @@ juce::String MainComponent::formatValue(const juce::String& name, double v)
         double ms = 1.0 * std::pow(600.0, v);
         return juce::String((int)ms) + " ms";
     }
+    if (name == "FREQ")
+    {
+        double hz = 200.0 * std::pow(15.0, v);
+        return hz < 1000.0 ? juce::String((int)hz) + " Hz"
+                           : juce::String(hz / 1000.0, 2) + " kHz";
+    }
+    if (name == "Q")
+    {
+        double q = 1.0 + v * 7.0;
+        return "Q " + juce::String(q, 1);
+    }
+    if (name == "SENS")
+        return juce::String((int)(v * 100.0)) + "%";
     if (name == "RATE")
     {
         double hz = 0.1 * std::pow(80.0, v);
@@ -967,6 +994,10 @@ void MainComponent::timerCallback()
         { &phaserDepthKnob,   &phaserDepthValLabel,   "DEPTH"     },
         { &phaserFeedbackKnob,&phaserFeedbackValLabel,"FEEDBACK"  },
         { &phaserMixKnob,     &phaserMixValLabel,     "MIX"       },
+        { &wahFreqKnob,       &wahFreqValLabel,       "FREQ"      },
+        { &wahQKnob,          &wahQValLabel,          "Q"         },
+        { &wahSensKnob,       &wahSensValLabel,       "SENS"      },
+        { &wahMixKnob,        &wahMixValLabel,        "MIX"       },
         { &delayTimeKnob,     &delayTimeValLabel,     "TIME"      },
         { &delayFeedbackKnob, &delayFeedbackValLabel, "FEEDBACK"  },
         { &delayMixKnob,      &delayMixValLabel,      "MIX"       },
@@ -1070,6 +1101,7 @@ void MainComponent::prepareToPlay(int samplesPerBlockExpected, double sampleRate
     backingBuffer.setSize(2, samplesPerBlockExpected + 512, false, true, false);
 
     noiseGate.prepare(sampleRate);
+    wahWah.prepare(sampleRate);
     powerMetalDist.prepare(sampleRate);
     toneStack.prepare(sampleRate);
     presenceFilter.prepare(sampleRate);
@@ -1149,11 +1181,18 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& info)
     // backingBuffer was pre-allocated in prepareToPlay — never resize on the audio thread
     // Cache bypass flags once per block (avoid per-sample atomic reads)
     const bool bpGate   = gateBypass  .load (std::memory_order_relaxed);
+    const bool bpWah    = wahBypass   .load (std::memory_order_relaxed);
     const bool bpDist   = distBypass  .load (std::memory_order_relaxed);
     const bool bpPreamp = preampBypass.load (std::memory_order_relaxed);
     const bool bpPhaser = phaserBypass.load (std::memory_order_relaxed);
     const bool bpDelay  = delayBypass .load (std::memory_order_relaxed);
     const bool bpReverb = reverbBypass.load (std::memory_order_relaxed);
+
+    // Cache wah parameters once per block
+    const float wahFreq = pWahFreq.load (std::memory_order_relaxed);
+    const float wahQ    = pWahQ   .load (std::memory_order_relaxed);
+    const float wahSens = pWahSens.load (std::memory_order_relaxed);
+    const float wahMix  = pWahMix .load (std::memory_order_relaxed);
 
     const bool btPlaying = transportSource.isPlaying();
     if (btPlaying)
@@ -1181,6 +1220,7 @@ void MainComponent::getNextAudioBlock(const juce::AudioSourceChannelInfo& info)
 
         double s = (double)rawIn;
         if (!bpGate)   s = noiseGate.process ((float)s);
+        if (!bpWah)    s = wahWah.process ((float)s, wahFreq, wahQ, wahSens, wahMix);
         if (!bpDist)   s = powerMetalDist.process (s);
         if (!bpPreamp) { s = gainStage.process ((float)s); s = toneStack.process (s); }
         s = presenceFilter.process (s);   // presence always active
@@ -1263,6 +1303,11 @@ void MainComponent::savePreset (const juce::File& file)
     obj->setProperty ("phaserDepth",   (double)pPhaserDepth.load());
     obj->setProperty ("phaserFeedback",(double)pPhaserFeedback.load());
     obj->setProperty ("phaserMix",     (double)pPhaserMix.load());
+    obj->setProperty ("wahFreq",       (double)pWahFreq.load());
+    obj->setProperty ("wahQ",          (double)pWahQ.load());
+    obj->setProperty ("wahSens",       (double)pWahSens.load());
+    obj->setProperty ("wahMix",        (double)pWahMix.load());
+    obj->setProperty ("wahBypass",     wahBypass.load());
     obj->setProperty ("delayTime",     (double)pDelayTime.load());
     obj->setProperty ("delayFeedback", (double)pDelayFeedback.load());
     obj->setProperty ("delayMix",      (double)pDelayMix.load());
@@ -1314,6 +1359,10 @@ void MainComponent::loadPreset (const juce::File& file)
     phaserDepthKnob  .setValue (gd("phaserDepth",   0.70), juce::sendNotification);
     phaserFeedbackKnob.setValue(gd("phaserFeedback",0.40), juce::sendNotification);
     phaserMixKnob    .setValue (gd("phaserMix",     0.50), juce::sendNotification);
+    wahFreqKnob      .setValue (gd("wahFreq",       0.35), juce::sendNotification);
+    wahQKnob         .setValue (gd("wahQ",          0.40), juce::sendNotification);
+    wahSensKnob      .setValue (gd("wahSens",       0.60), juce::sendNotification);
+    wahMixKnob       .setValue (gd("wahMix",        0.70), juce::sendNotification);
     delayTimeKnob    .setValue (gd("delayTime",     0.35), juce::sendNotification);
     delayFeedbackKnob.setValue (gd("delayFeedback", 0.40), juce::sendNotification);
     delayMixKnob     .setValue (gd("delayMix",      0.30), juce::sendNotification);
@@ -1342,6 +1391,7 @@ void MainComponent::loadPreset (const juce::File& file)
     applyBypass (gateBypassBtn,   gateBypass,   gb("gateBypass",   false));
     applyBypass (distBypassBtn,   distBypass,   gb("distBypass",   false));
     applyBypass (phaserBypassBtn, phaserBypass, gb("phaserBypass", false));
+    applyBypass (wahBypassBtn,    wahBypass,    gb("wahBypass",    false));
     applyBypass (delayBypassBtn,  delayBypass,  gb("delayBypass",  false));
     applyBypass (preampBypassBtn, preampBypass, gb("preampBypass", false));
     applyBypass (reverbBypassBtn, reverbBypass, gb("reverbBypass", false));
@@ -1369,6 +1419,10 @@ void MainComponent::applyDefaults()
     phaserDepthKnob  .setValue (0.70, juce::sendNotification);
     phaserFeedbackKnob.setValue(0.40, juce::sendNotification);
     phaserMixKnob    .setValue (0.50, juce::sendNotification);
+    wahFreqKnob      .setValue (0.35, juce::sendNotification);
+    wahQKnob         .setValue (0.40, juce::sendNotification);
+    wahSensKnob      .setValue (0.60, juce::sendNotification);
+    wahMixKnob       .setValue (0.70, juce::sendNotification);
     delayTimeKnob    .setValue (0.35, juce::sendNotification);
     delayFeedbackKnob.setValue (0.40, juce::sendNotification);
     delayMixKnob     .setValue (0.30, juce::sendNotification);
@@ -1497,10 +1551,14 @@ void MainComponent::paint(juce::Graphics& g)
         g.drawRoundedRectangle(r, 8.0f, 1.5f);
     };
 
+    // Row 3 split: PHASER (left) | WAH WAH (right)
+    const int wahSplitX = (int)(getWidth() * 0.50f);
+
     // Rows 1-4
     drawMetalPanel(m, row1Y, getWidth() - m * 2, rowH);
     drawMetalPanel(m, row2Y, getWidth() - m * 2, rowH);
-    drawMetalPanel(m, row3Y, getWidth() - m * 2, rowH);
+    drawMetalPanel(m,            row3Y, wahSplitX - m * 2,              rowH);  // Phaser
+    drawMetalPanel(wahSplitX + m, row3Y, getWidth() - wahSplitX - m * 2, rowH);  // Wah
     drawMetalPanel(m, row4Y, getWidth() - m * 2, rowH);
 
     // Row 5 — four sub-panels: preamp | power amp | cab sim | reverb
@@ -1535,6 +1593,7 @@ void MainComponent::resized()
     const int powerEndX  = (int)(getWidth() * 0.53f);
     const int cabEndX    = (int)(getWidth() * 0.73f);
     const int tunerEndX  = (int)(getWidth() * 0.38f);
+    const int wahSplitX  = (int)(getWidth() * 0.50f);
 
     // Settings button — right side of title bar, vertically centred
     const int btnH = 26;
@@ -1593,7 +1652,9 @@ void MainComponent::resized()
         const int bx = getWidth() - m * 2 - bw;
         gateBypassBtn  .setBounds (bx, row1Y + 1, bw, bh);
         distBypassBtn  .setBounds (bx, row2Y + 1, bw, bh);
-        phaserBypassBtn.setBounds (bx, row3Y + 1, bw, bh);
+        // Row 3 is split — each sub-panel gets its own bypass button
+        phaserBypassBtn.setBounds (wahSplitX - m - bw, row3Y + 1, bw, bh);
+        wahBypassBtn   .setBounds (bx,                  row3Y + 1, bw, bh);
         delayBypassBtn .setBounds (bx, row4Y + 1, bw, bh);
         // Preamp — right side of preamp sub-panel
         preampBypassBtn.setBounds (preampEndX - m - bw, row5Y + 1, bw, bh);
@@ -1613,11 +1674,26 @@ void MainComponent::resized()
             tightKnob,         tightLabel,         tightValLabel,
             distLevelKnob,     distLevelLabel,     distLevelValLabel);
 
-    layout4(row3Y, phaserSectionLabel,
-            phaserRateKnob,    phaserRateLabel,    phaserRateValLabel,
-            phaserDepthKnob,   phaserDepthLabel,   phaserDepthValLabel,
-            phaserFeedbackKnob,phaserFeedbackLabel,phaserFeedbackValLabel,
-            phaserMixKnob,     phaserMixLabel,     phaserMixValLabel);
+    // Row 3 — PHASER (left half) | WAH WAH (right half)
+    {
+        auto area = juce::Rectangle<int>(m*2, row3Y, wahSplitX - m*3, rowH - pad*2);
+        phaserSectionLabel.setBounds(area.removeFromTop(secH));
+        const int kw = area.getWidth() / 4;
+        placeKnob(area, kw, phaserRateKnob,     phaserRateLabel,     phaserRateValLabel);
+        placeKnob(area, kw, phaserDepthKnob,    phaserDepthLabel,    phaserDepthValLabel);
+        placeKnob(area, kw, phaserFeedbackKnob, phaserFeedbackLabel, phaserFeedbackValLabel);
+        placeKnob(area, kw, phaserMixKnob,      phaserMixLabel,      phaserMixValLabel);
+    }
+    {
+        auto area = juce::Rectangle<int>(wahSplitX + m, row3Y,
+                                         getWidth() - wahSplitX - m*2, rowH - pad*2);
+        wahSectionLabel.setBounds(area.removeFromTop(secH));
+        const int kw = area.getWidth() / 4;
+        placeKnob(area, kw, wahFreqKnob, wahFreqLabel, wahFreqValLabel);
+        placeKnob(area, kw, wahQKnob,    wahQLabel,    wahQValLabel);
+        placeKnob(area, kw, wahSensKnob, wahSensLabel, wahSensValLabel);
+        placeKnob(area, kw, wahMixKnob,  wahMixLabel,  wahMixValLabel);
+    }
 
     layout4(row4Y, delaySectionLabel,       // MIX moved to col-4 to align with Phaser
             delayTimeKnob,     delayTimeLabel,     delayTimeValLabel,

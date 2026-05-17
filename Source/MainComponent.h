@@ -8,6 +8,7 @@ class VUMeterComponent;   // defined in MainComponent.cpp
 #include "DSP/ToneStack.h"
 #include "DSP/PresenceFilter.h"
 #include "DSP/Phaser.h"
+#include "DSP/WahWah.h"
 #include "DSP/TapeDelay.h"
 #include "DSP/Reverb.h"
 #include "DSP/MasterVolume.h"
@@ -16,7 +17,7 @@ class VUMeterComponent;   // defined in MainComponent.cpp
 
 // ============================================================================
 // Signal chain:
-//   Input → [NoiseGate] → [Distortion] → [Gain] → [ToneStack] → [Presence]
+//   Input → [NoiseGate] → [WahWah] → [Distortion] → [Gain] → [ToneStack] → [Presence]
 //         → [Phaser] → [TapeDelay] → [CabSim] → [Reverb] → [Master] → Stereo Out
 //   + Backing track mixed into stereo output
 // ============================================================================
@@ -57,11 +58,17 @@ private:
     juce::Label  driveValLabel, toneValLabel, tightValLabel, distLevelValLabel;
     juce::Label  distSectionLabel;
 
-    // UI — phaser
+    // UI — phaser  (left half of row 3)
     juce::Slider phaserRateKnob, phaserDepthKnob, phaserFeedbackKnob, phaserMixKnob;
     juce::Label  phaserRateLabel,     phaserDepthLabel,     phaserFeedbackLabel,     phaserMixLabel;
     juce::Label  phaserRateValLabel,  phaserDepthValLabel,  phaserFeedbackValLabel,  phaserMixValLabel;
     juce::Label  phaserSectionLabel;
+
+    // UI — wah wah  (right half of row 3)
+    juce::Slider wahFreqKnob, wahQKnob, wahSensKnob, wahMixKnob;
+    juce::Label  wahFreqLabel,    wahQLabel,    wahSensLabel,    wahMixLabel;
+    juce::Label  wahFreqValLabel, wahQValLabel, wahSensValLabel, wahMixValLabel;
+    juce::Label  wahSectionLabel;
 
     // UI — tape delay
     juce::Slider delayTimeKnob, delayFeedbackKnob, delayMixKnob, delayWowKnob;
@@ -118,6 +125,7 @@ private:
     juce::TextButton gateBypassBtn   { "ON" };
     juce::TextButton distBypassBtn   { "ON" };
     juce::TextButton phaserBypassBtn { "ON" };
+    juce::TextButton wahBypassBtn    { "ON" };
     juce::TextButton delayBypassBtn  { "ON" };
     juce::TextButton preampBypassBtn { "ON" };
     juce::TextButton reverbBypassBtn { "ON" };
@@ -145,6 +153,7 @@ private:
     //==========================================================================
     // DSP — audio thread only
     NoiseGate            noiseGate;
+    WahWah               wahWah;
     PowerMetalDistortion powerMetalDist;
     GainStage            gainStage;
     ToneStack            toneStack;
@@ -184,6 +193,11 @@ private:
     std::atomic<float> pPhaserFeedback{0.40f};
     std::atomic<float> pPhaserMix     {0.50f};
 
+    std::atomic<float> pWahFreq       {0.35f};   // ~590 Hz base
+    std::atomic<float> pWahQ          {0.40f};   // Q ≈ 3.8
+    std::atomic<float> pWahSens       {0.60f};   // envelope sensitivity
+    std::atomic<float> pWahMix        {0.70f};   // wet/dry
+
     std::atomic<float> pDelayTime     {0.35f};
     std::atomic<float> pDelayFeedback {0.40f};
     std::atomic<float> pDelayMix      {0.30f};
@@ -214,6 +228,7 @@ private:
 
     // Effect bypass flags — toggled by buttons, read by audio thread
     std::atomic<bool>  gateBypass     {false};
+    std::atomic<bool>  wahBypass      {false};
     std::atomic<bool>  distBypass     {false};
     std::atomic<bool>  phaserBypass   {false};
     std::atomic<bool>  delayBypass    {false};
